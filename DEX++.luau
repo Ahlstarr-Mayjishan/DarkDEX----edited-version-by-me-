@@ -1135,8 +1135,18 @@ Main = (function()
 				LastRun = 0,
 				Completed = 0,
 				Failed = 0,
-				MinDelay = 0.12,
 			}
+
+			local function getMinDelay()
+				local tryNative = not Settings.Decompiler.PreferDecompilerFallback
+				if nativeDecompile and tryNative then
+					return 0.002 -- Instant native decompiler (2ms delay)
+				elseif Settings.Decompiler.DecompilerFallback == "Shiny" then
+					return 0.02 -- Localhost Shiny (20ms)
+				else
+					return 0.15 -- Remote API like lua.expert (150ms delay to prevent rate limits)
+				end
+			end
 
 			local function sortJobs()
 				table.sort(queue.Jobs, function(a, b)
@@ -1161,7 +1171,7 @@ Main = (function()
 						local job = table.remove(queue.Jobs, 1)
 						queue.ActiveJob = job
 
-						local waitTime = queue.MinDelay - (os.clock() - queue.LastRun)
+						local waitTime = getMinDelay() - (os.clock() - queue.LastRun)
 						if waitTime > 0 then task.wait(waitTime) end
 
 						local success, result = pcall(decompileWithCache, job.Script, table.unpack(job.Args))
@@ -2185,7 +2195,7 @@ Main = (function()
 		Main.CreateApp({Name = "Properties", IconMap = Main.LargeIcons, Icon = "Properties", Open = true, Window = Properties.Window})
 
 		local cptsOnMouseClick = nil
-		Main.CreateApp({Name = "Click part to select", IconMap = Explorer.ClassIcons, Icon = "SelectionBox", OnClick = function(callback)
+		Main.CreateApp({Name = "Click part to select", IconMap = Main.LargeIcons, Icon = "Object", OnClick = function(callback)
 			if callback then
 				local mouse = Main.Mouse
 				cptsOnMouseClick = mouse.Button1Down:Connect(function()

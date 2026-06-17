@@ -1,4 +1,4 @@
---!strict
+--!nocheck
 --[[
 	Code Search App Module
 
@@ -259,6 +259,7 @@ local function main()
 			local decompiled = 0
 			local cached = 0
 			local failed = 0
+			local batchCount = 0
 
 			if total == 0 then
 				indexing = false
@@ -270,19 +271,29 @@ local function main()
 				if not indexing then break end
 
 				local percent = math.floor((i / total) * 1000) / 10
-				setStatus(("Indexing: %d / %d (%.1f%%) | cached %d | new %d | failed %d"):format(i, total, percent, cached, decompiled, failed))
+				
+				-- Throttle UI updates to prevent layout/redraw stutters
+				if i % 20 == 0 or i == total then
+					setStatus(("Indexing: %d / %d (%.1f%%) | cached %d | new %d | failed %d"):format(i, total, percent, cached, decompiled, failed))
+				end
 
 				local key = getScriptKey(scriptInstance)
 				if key and indexedKeys[key] and hasCachedFile(scriptInstance) then
 					cached += 1
-					task.wait()
+					batchCount += 1
+					if batchCount % 100 == 0 then
+						task.wait()
+					end
 					continue
 				end
 
 				if hasCachedFile(scriptInstance) then
 					if key then indexedKeys[key] = true end
 					cached += 1
-					task.wait()
+					batchCount += 1
+					if batchCount % 100 == 0 then
+						task.wait()
+					end
 					continue
 				end
 

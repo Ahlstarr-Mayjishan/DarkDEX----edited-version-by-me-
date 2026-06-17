@@ -2269,24 +2269,34 @@ local function main()
 				self:UpdateMarkers()
 			end
 
+			local arrow1 = button1 and button1:FindFirstChild("Arrow")
+			local arrow2 = button2 and button2:FindFirstChild("Arrow")
 			if self:CanScrollUp() then
-				for i,v in pairs(button1.Arrow:GetChildren()) do
-					v.BackgroundTransparency = 0
+				if arrow1 then
+					for i,v in pairs(arrow1:GetChildren()) do
+						v.BackgroundTransparency = 0
+					end
 				end
 			else
 				button1.BackgroundTransparency = 1
-				for i,v in pairs(button1.Arrow:GetChildren()) do
-					v.BackgroundTransparency = 0.5
+				if arrow1 then
+					for i,v in pairs(arrow1:GetChildren()) do
+						v.BackgroundTransparency = 0.5
+					end
 				end
 			end
 			if self:CanScrollDown() then
-				for i,v in pairs(button2.Arrow:GetChildren()) do
-					v.BackgroundTransparency = 0
+				if arrow2 then
+					for i,v in pairs(arrow2:GetChildren()) do
+						v.BackgroundTransparency = 0
+					end
 				end
 			else
 				button2.BackgroundTransparency = 1
-				for i,v in pairs(button2.Arrow:GetChildren()) do
-					v.BackgroundTransparency = 0.5
+				if arrow2 then
+					for i,v in pairs(arrow2:GetChildren()) do
+						v.BackgroundTransparency = 0.5
+					end
 				end
 			end
 
@@ -2366,11 +2376,17 @@ local function main()
 			self.Gui.BackgroundColor3 = data.FrameColor or Color3.new(0,0,0)
 			self.GuiElems.Button1.BackgroundColor3 = data.ButtonColor or Color3.new(0,0,0)
 			self.GuiElems.Button2.BackgroundColor3 = data.ButtonColor or Color3.new(0,0,0)
-			for i,v in pairs(self.GuiElems.Button1.Arrow:GetChildren()) do
-				v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+			local arrow1 = self.GuiElems.Button1 and self.GuiElems.Button1:FindFirstChild("Arrow")
+			local arrow2 = self.GuiElems.Button2 and self.GuiElems.Button2:FindFirstChild("Arrow")
+			if arrow1 then
+				for i,v in pairs(arrow1:GetChildren()) do
+					v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+				end
 			end
-			for i,v in pairs(self.GuiElems.Button2.Arrow:GetChildren()) do
-				v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+			if arrow2 then
+				for i,v in pairs(arrow2:GetChildren()) do
+					v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+				end
 			end
 		end
 

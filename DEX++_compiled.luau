@@ -6261,24 +6261,34 @@ end,
     				self:UpdateMarkers()
     			end
     
+    			local arrow1 = button1 and button1:FindFirstChild("Arrow")
+    			local arrow2 = button2 and button2:FindFirstChild("Arrow")
     			if self:CanScrollUp() then
-    				for i,v in pairs(button1.Arrow:GetChildren()) do
-    					v.BackgroundTransparency = 0
+    				if arrow1 then
+    					for i,v in pairs(arrow1:GetChildren()) do
+    						v.BackgroundTransparency = 0
+    					end
     				end
     			else
     				button1.BackgroundTransparency = 1
-    				for i,v in pairs(button1.Arrow:GetChildren()) do
-    					v.BackgroundTransparency = 0.5
+    				if arrow1 then
+    					for i,v in pairs(arrow1:GetChildren()) do
+    						v.BackgroundTransparency = 0.5
+    					end
     				end
     			end
     			if self:CanScrollDown() then
-    				for i,v in pairs(button2.Arrow:GetChildren()) do
-    					v.BackgroundTransparency = 0
+    				if arrow2 then
+    					for i,v in pairs(arrow2:GetChildren()) do
+    						v.BackgroundTransparency = 0
+    					end
     				end
     			else
     				button2.BackgroundTransparency = 1
-    				for i,v in pairs(button2.Arrow:GetChildren()) do
-    					v.BackgroundTransparency = 0.5
+    				if arrow2 then
+    					for i,v in pairs(arrow2:GetChildren()) do
+    						v.BackgroundTransparency = 0.5
+    					end
     				end
     			end
     
@@ -6358,11 +6368,17 @@ end,
     			self.Gui.BackgroundColor3 = data.FrameColor or Color3.new(0,0,0)
     			self.GuiElems.Button1.BackgroundColor3 = data.ButtonColor or Color3.new(0,0,0)
     			self.GuiElems.Button2.BackgroundColor3 = data.ButtonColor or Color3.new(0,0,0)
-    			for i,v in pairs(self.GuiElems.Button1.Arrow:GetChildren()) do
-    				v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+    			local arrow1 = self.GuiElems.Button1 and self.GuiElems.Button1:FindFirstChild("Arrow")
+    			local arrow2 = self.GuiElems.Button2 and self.GuiElems.Button2:FindFirstChild("Arrow")
+    			if arrow1 then
+    				for i,v in pairs(arrow1:GetChildren()) do
+    					v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+    				end
     			end
-    			for i,v in pairs(self.GuiElems.Button2.Arrow:GetChildren()) do
-    				v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+    			if arrow2 then
+    				for i,v in pairs(arrow2:GetChildren()) do
+    					v.BackgroundColor3 = data.ArrowColor or Color3.new(0,0,0)
+    				end
     			end
     		end
     
@@ -14750,10 +14766,21 @@ end,
     		AddSeperator("Decompiler")
     		AddText("If executor does not support decompile, it will use the fallback option.")
     		AddText("'getbytecode' is mandatory to use fallback decompilers.")
-    		local decompilerOption = {"Konstant", "AdvancedDecompiler", "Shiny"}
-    		local decompiler = AddDropdown("Decompiler Fallback", decompilerOption, Settings.Decompiler.DecompilerFallback, false, 125)
+    		local decompilerOption = {"Executor (Native)", "Konstant", "AdvancedDecompiler", "Shiny"}
+    		local initialSelected = "Executor (Native)"
+    		if Settings.Decompiler.PreferDecompilerFallback then
+    			initialSelected = Settings.Decompiler.DecompilerFallback
+    		end
+    
+    		local decompiler = AddDropdown("Active Decompiler", decompilerOption, initialSelected, false, 125)
     		decompiler.OnSelect:Connect(function()
-    			Settings.Decompiler.DecompilerFallback = decompiler.Selected
+    			local selected = decompiler.Selected
+    			if selected == "Executor (Native)" then
+    				Settings.Decompiler.PreferDecompilerFallback = false
+    			else
+    				Settings.Decompiler.PreferDecompilerFallback = true
+    				Settings.Decompiler.DecompilerFallback = selected
+    			end
     		end)
     		
     		local ShinyPort = AddTextbox("Shiny Decompiler Port", tostring(Settings.Decompiler.ShinyDecompilerPort), 50)
@@ -14768,11 +14795,6 @@ end,
     					ShinyPort.Text = Settings.Decompiler.ShinyDecompilerPort
     				end
     			end
-    		end)
-    		
-    		local preferFallback = AddCheckbox("Prefer Fallback Decompiler", Settings.Decompiler.PreferDecompilerFallback)
-    		preferFallback.OnInput:Connect(function()
-    			Settings.Decompiler.PreferDecompilerFallback = preferFallback.Toggled
     		end)
     		
     		-- Save buttons below
@@ -14818,7 +14840,7 @@ end,
     end
 end,
 ["CodeSearch"] = function()
-    --!strict
+    --!nocheck
     --[[
     	Code Search App Module
     
@@ -15079,6 +15101,7 @@ end,
     			local decompiled = 0
     			local cached = 0
     			local failed = 0
+    			local batchCount = 0
     
     			if total == 0 then
     				indexing = false
@@ -15090,19 +15113,29 @@ end,
     				if not indexing then break end
     
     				local percent = math.floor((i / total) * 1000) / 10
-    				setStatus(("Indexing: %d / %d (%.1f%%) | cached %d | new %d | failed %d"):format(i, total, percent, cached, decompiled, failed))
+    				
+    				-- Throttle UI updates to prevent layout/redraw stutters
+    				if i % 20 == 0 or i == total then
+    					setStatus(("Indexing: %d / %d (%.1f%%) | cached %d | new %d | failed %d"):format(i, total, percent, cached, decompiled, failed))
+    				end
     
     				local key = getScriptKey(scriptInstance)
     				if key and indexedKeys[key] and hasCachedFile(scriptInstance) then
     					cached += 1
-    					task.wait()
+    					batchCount += 1
+    					if batchCount % 100 == 0 then
+    						task.wait()
+    					end
     					continue
     				end
     
     				if hasCachedFile(scriptInstance) then
     					if key then indexedKeys[key] = true end
     					cached += 1
-    					task.wait()
+    					batchCount += 1
+    					if batchCount % 100 == 0 then
+    						task.wait()
+    					end
     					continue
     				end
     
@@ -20387,8 +20420,18 @@ Main = (function()
 				LastRun = 0,
 				Completed = 0,
 				Failed = 0,
-				MinDelay = 0.12,
 			}
+
+			local function getMinDelay()
+				local tryNative = not Settings.Decompiler.PreferDecompilerFallback
+				if nativeDecompile and tryNative then
+					return 0.002 -- Instant native decompiler (2ms delay)
+				elseif Settings.Decompiler.DecompilerFallback == "Shiny" then
+					return 0.02 -- Localhost Shiny (20ms)
+				else
+					return 0.15 -- Remote API like lua.expert (150ms delay to prevent rate limits)
+				end
+			end
 
 			local function sortJobs()
 				table.sort(queue.Jobs, function(a, b)
@@ -20413,7 +20456,7 @@ Main = (function()
 						local job = table.remove(queue.Jobs, 1)
 						queue.ActiveJob = job
 
-						local waitTime = queue.MinDelay - (os.clock() - queue.LastRun)
+						local waitTime = getMinDelay() - (os.clock() - queue.LastRun)
 						if waitTime > 0 then task.wait(waitTime) end
 
 						local success, result = pcall(decompileWithCache, job.Script, table.unpack(job.Args))
@@ -21437,7 +21480,7 @@ Main = (function()
 		Main.CreateApp({Name = "Properties", IconMap = Main.LargeIcons, Icon = "Properties", Open = true, Window = Properties.Window})
 
 		local cptsOnMouseClick = nil
-		Main.CreateApp({Name = "Click part to select", IconMap = Explorer.ClassIcons, Icon = "SelectionBox", OnClick = function(callback)
+		Main.CreateApp({Name = "Click part to select", IconMap = Main.LargeIcons, Icon = "Object", OnClick = function(callback)
 			if callback then
 				local mouse = Main.Mouse
 				cptsOnMouseClick = mouse.Button1Down:Connect(function()

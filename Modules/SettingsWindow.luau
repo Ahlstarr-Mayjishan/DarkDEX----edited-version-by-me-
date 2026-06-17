@@ -356,10 +356,21 @@ local function main()
 		AddSeperator("Decompiler")
 		AddText("If executor does not support decompile, it will use the fallback option.")
 		AddText("'getbytecode' is mandatory to use fallback decompilers.")
-		local decompilerOption = {"Konstant", "AdvancedDecompiler", "Shiny"}
-		local decompiler = AddDropdown("Decompiler Fallback", decompilerOption, Settings.Decompiler.DecompilerFallback, false, 125)
+		local decompilerOption = {"Executor (Native)", "Konstant", "AdvancedDecompiler", "Shiny"}
+		local initialSelected = "Executor (Native)"
+		if Settings.Decompiler.PreferDecompilerFallback then
+			initialSelected = Settings.Decompiler.DecompilerFallback
+		end
+
+		local decompiler = AddDropdown("Active Decompiler", decompilerOption, initialSelected, false, 125)
 		decompiler.OnSelect:Connect(function()
-			Settings.Decompiler.DecompilerFallback = decompiler.Selected
+			local selected = decompiler.Selected
+			if selected == "Executor (Native)" then
+				Settings.Decompiler.PreferDecompilerFallback = false
+			else
+				Settings.Decompiler.PreferDecompilerFallback = true
+				Settings.Decompiler.DecompilerFallback = selected
+			end
 		end)
 		
 		local ShinyPort = AddTextbox("Shiny Decompiler Port", tostring(Settings.Decompiler.ShinyDecompilerPort), 50)
@@ -374,11 +385,6 @@ local function main()
 					ShinyPort.Text = Settings.Decompiler.ShinyDecompilerPort
 				end
 			end
-		end)
-		
-		local preferFallback = AddCheckbox("Prefer Fallback Decompiler", Settings.Decompiler.PreferDecompilerFallback)
-		preferFallback.OnInput:Connect(function()
-			Settings.Decompiler.PreferDecompilerFallback = preferFallback.Toggled
 		end)
 		
 		-- Save buttons below
