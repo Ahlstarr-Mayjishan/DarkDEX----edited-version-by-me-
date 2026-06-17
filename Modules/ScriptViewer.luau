@@ -482,6 +482,8 @@ local function main()
 		rebuildSearch()
 		window:Show()
 	end
+
+	return ScriptViewer
 end
 
 -- TODO: Remove when open source

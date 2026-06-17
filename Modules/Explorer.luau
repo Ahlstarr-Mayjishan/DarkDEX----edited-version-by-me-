@@ -911,6 +911,7 @@ local function main()
 
 		if expanded == Explorer.SearchExpanded then context:AddRegistered("CLEAR_SEARCH_AND_JUMP_TO") end
 		if env.setclipboard then context:AddRegistered("COPY_PATH") end
+		if env.setclipboard then context:AddRegistered("COPY_TO_AI") end
 		context:AddRegistered("FIND_OBJECT_LINKS", #sList ~= 1 or not ObjectLinks)
 		context:AddRegistered("VIEW_IMAGE_ASSETS", #sList ~= 1 or not ImageViewer)
 		context:AddRegistered("INSERT_OBJECT")
@@ -1343,6 +1344,83 @@ local function main()
 			return str
 		end
 
+		local function summarizeForAI(obj)
+			local lines = {}
+			local function push(text)
+				lines[#lines + 1] = text
+			end
+			local okPath, path = pcall(function()
+				return Explorer.GetInstancePath(obj)
+			end)
+			push("- " .. (okPath and clth(tostring(path)) or obj:GetFullName()) .. " [" .. obj.ClassName .. "]")
+			push("  Parent: " .. (obj.Parent and clth(tostring(Explorer.GetInstancePath(obj.Parent))) or "nil"))
+
+			local children = obj:GetChildren()
+			local scriptCount, remoteCount, partCount = 0, 0, 0
+			local notable = {}
+			for _, child in ipairs(children) do
+				if child:IsA("LuaSourceContainer") then
+					scriptCount += 1
+					if #notable < 5 then notable[#notable + 1] = child.Name .. " [" .. child.ClassName .. "]" end
+				elseif child:IsA("BasePart") then
+					partCount += 1
+				elseif child:IsA("RemoteEvent") or child:IsA("RemoteFunction") or child:IsA("UnreliableRemoteEvent") or child:IsA("BindableEvent") or child:IsA("BindableFunction") then
+					remoteCount += 1
+					if #notable < 5 then notable[#notable + 1] = child.Name .. " [" .. child.ClassName .. "]" end
+				end
+			end
+			push(("  Children: %d | scripts: %d | remotes/bindables: %d | parts: %d"):format(#children, scriptCount, remoteCount, partCount))
+			if #notable > 0 then
+				push("  Notable children: " .. table.concat(notable, ", "))
+			end
+
+			if obj:IsA("BasePart") then
+				push(("  BasePart: Anchored=%s CanCollide=%s Transparency=%s"):format(tostring(obj.Anchored), tostring(obj.CanCollide), tostring(obj.Transparency)))
+			end
+			if obj:IsA("Model") then
+				push("  Model: PrimaryPart=" .. tostring(obj.PrimaryPart and obj.PrimaryPart.Name or "nil"))
+			end
+			if obj:IsA("LuaSourceContainer") then
+				if obj:IsA("Script") or obj:IsA("LocalScript") then
+					push("  RunContext: " .. tostring(obj.RunContext))
+				end
+				if env.isViableDecompileScript then
+					push("  Decompileable: " .. tostring(env.isViableDecompileScript(obj)))
+				end
+			end
+			return table.concat(lines, "\n")
+		end
+
+		local function buildAIPrompt()
+			local lines = {
+				"You are helping me inspect Roblox objects in DEX++.",
+				"I am a beginner, so explain in simple language and keep jargon low.",
+				"",
+				"Goal:",
+				"- Tell me what this selection likely does.",
+				"- Point out which scripts, remotes, or nearby objects matter most.",
+				"- If edits are needed, give short step-by-step guidance I can follow.",
+				"",
+				"Selection summary:",
+				("Count: %d"):format(#sList),
+			}
+			for i = 1, math.min(#sList, 6) do
+				lines[#lines + 1] = summarizeForAI(sList[i].Obj)
+			end
+			if #sList > 6 then
+				lines[#lines + 1] = ("... and %d more selected object(s)."):format(#sList - 6)
+			end
+			lines[#lines + 1] = ""
+			lines[#lines + 1] = "Helpful DEX++ tools already available:"
+			lines[#lines + 1] = "- Object Links / Reference Inspector"
+			lines[#lines + 1] = "- Script Relations / Dependency Graph"
+			lines[#lines + 1] = "- Remote Usage Map / Runtime Inspector"
+			lines[#lines + 1] = "- Code Search / Smart Search"
+			lines[#lines + 1] = ""
+			lines[#lines + 1] = "Answer with the best next actions first, then any useful details."
+			return table.concat(lines, "\n")
+		end
+
 		context:Register("COPY_PATH",{Name = "Copy Path", IconMap = Explorer.LegacyClassIcons, Icon = 50, OnClick = function()
 			local sList = selection.List
 			if #sList == 1 then
@@ -1359,6 +1437,12 @@ local function main()
 				end
 				resList[count] = "}"
 				env.setclipboard(table.concat(resList,"\n"))
+			end
+		end})
+
+		context:Register("COPY_TO_AI",{Name = "Copy to AI", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function()
+			if env.setclipboard then
+				env.setclipboard(buildAIPrompt())
 			end
 		end})
 
