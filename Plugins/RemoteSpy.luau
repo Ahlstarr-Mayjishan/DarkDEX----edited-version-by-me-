@@ -655,7 +655,7 @@ local function main()
 				end
 				hook_instance(inst)
 			end
-		end)
+		end))
 		hook_cons[#hook_cons + 1] = da_con
 	end
 
