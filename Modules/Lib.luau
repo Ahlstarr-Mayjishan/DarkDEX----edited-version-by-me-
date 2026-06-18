@@ -4163,6 +4163,7 @@ local function main()
 							scrollEvent:Disconnect()
 							obj:SetCopyableSelection()
 							if obj.OnSelectionChanged then obj.OnSelectionChanged:Fire(obj:GetSelectionText()) end
+							if obj.OnSelectionFinished then obj.OnSelectionFinished:Fire(obj:GetSelectionText(), mouse.X, mouse.Y) end
 							--updateSelection()
 						end
 					end)
@@ -4262,6 +4263,8 @@ local function main()
 			linesFrame.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					obj:SetEditing(true,input)
+				elseif input.UserInputType == Enum.UserInputType.MouseButton2 and obj.OnRightClick then
+					obj.OnRightClick:Fire(input.Position.X, input.Position.Y)
 				end
 			end)
 
@@ -5197,7 +5200,9 @@ local function main()
 				MaxTextCols = 0,
 				ScrollV = scrollV,
 				ScrollH = scrollH,
-				OnSelectionChanged = Lib.Signal.new()
+				OnSelectionChanged = Lib.Signal.new(),
+				OnSelectionFinished = Lib.Signal.new(),
+				OnRightClick = Lib.Signal.new()
 			},mt)
 
 			scrollV.WheelIncrement = 3
