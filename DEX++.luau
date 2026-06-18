@@ -143,6 +143,8 @@ DefaultSettings = (function()
 			HelperServerPort = 8080,
 		},
 		AutoCheckUpdate = true,
+		AutoUpdateRef = "v3.1",
+		AutoUpdateAllowBranch = false,
 		
 		RemoteBlockWriteAttribute = false, -- writes attribute to remote instance if remote is blocked/unblocked
 		ClassIcon = "NewDark",
@@ -220,10 +222,12 @@ Main = (function()
 	Main.AppControls = {}
 	Main.Apps = Apps
 	Main.MenuApps = {}
-	Main.GitName = "AZYsGithub"
-	Main.RepoName = "DexPlusPlus"
+	Main.GitName = "Ahlstarr-Mayjishan"
+	Main.RepoName = "DarkDEX----edited-version-by-me-"
 	Main.GitRepoName = Main.GitName.."/"..Main.RepoName
-	Main.UpdateScriptURL = "https://raw.githubusercontent.com/Ahlstarr-Mayjishan/DarkDEX----edited-version-by-me-/main/DEX%2B%2B_compiled.luau"
+	Main.UpdateScriptPath = "DEX%2B%2B_compiled.luau"
+	Main.DefaultUpdateRef = "v"..Main.Version
+	Main.UpdateScriptURL = nil
 	Main.UpdateCheckStarted = false
 	Main.LatestUpdateSource = nil
 
@@ -378,14 +382,20 @@ Main = (function()
 			if isFsSupported and (isfile(localPath) or isfile(localPathFallback)) then
 				local path = isfile(localPath) and localPath or localPathFallback
 				local s, err = pcall(function()
+					if gethsfuncs then _G.moduleData = nil end
 					control = loadstring(readfile(path))()
+					if not control and gethsfuncs then
+						control = _G.moduleData
+					end
 				end)
 				if not s then
 					warn('Failed to load local module ' .. name .. ': ' .. tostring(err))
 				end
 			end
 
-			if EmbeddedModules then -- Offline Modules
+			if not control and EmbeddedModules then -- Offline Modules
+				if not EmbeddedModules[name] then Main.Error("Missing Embedded Module: "..name) end
+				if gethsfuncs then _G.moduleData = nil end
 				control = EmbeddedModules[name]()
 
 				-- TODO: Remove when open source
@@ -804,12 +814,16 @@ Main = (function()
 				return helper.LastStatus == "active"
 			end
 
-			function helper.Deobfuscate(source)
-				local result = helper.Request("/deobfuscate", "POST", source, "text/plain")
+			function helper.NormalizeSource(source)
+				local result = helper.Request("/normalize-source", "POST", source, "text/plain")
 				if result and result.StatusCode == 200 and type(result.Body) == "string" then
 					return result.Body
 				end
 				return nil
+			end
+
+			function helper.Deobfuscate(source)
+				return helper.NormalizeSource(source)
 			end
 
 			function helper.AnalyzeSource(source)
@@ -855,6 +869,22 @@ Main = (function()
 			function helper.ClearSourceIndex()
 				local result = helper.Request("/index-clear", "POST", "", "text/plain")
 				return result and result.StatusCode == 200
+			end
+
+			function helper.SaveSourceIndex()
+				local result = helper.Request("/index-save", "POST", "", "text/plain")
+				if result and result.StatusCode == 200 and type(result.Body) == "string" then
+					return result.Body
+				end
+				return nil
+			end
+
+			function helper.LoadSourceIndex()
+				local result = helper.Request("/index-load", "POST", "", "text/plain")
+				if result and result.StatusCode == 200 and type(result.Body) == "string" then
+					return result.Body
+				end
+				return nil
 			end
 
 			function helper.AssignRole(task)
@@ -1978,10 +2008,32 @@ Main = (function()
 			or source:match("Version%s+([%d%.]+)")
 	end
 
+	Main.GetUpdateRef = function()
+		local settings = Settings or DefaultSettings or {}
+		local ref = tostring(settings.AutoUpdateRef or Main.DefaultUpdateRef or "")
+		ref = ref:gsub("^%s+", ""):gsub("%s+$", "")
+		if ref == "" then return nil end
+
+		local lowerRef = ref:lower()
+		local isBranchRef = lowerRef == "main" or lowerRef == "master" or lowerRef:match("^refs/heads/")
+		if isBranchRef and settings.AutoUpdateAllowBranch ~= true then
+			return nil
+		end
+		return ref
+	end
+
+	Main.GetUpdateScriptURL = function()
+		local ref = Main.GetUpdateRef()
+		if not ref then return nil end
+		return "https://raw.githubusercontent.com/"..Main.GitRepoName.."/"..ref.."/"..Main.UpdateScriptPath
+	end
+
 	Main.RestartFromLatest = function()
 		local source = Main.LatestUpdateSource
 		if not source or source == "" then
-			local ok, result = pcall(oldgame.HttpGet, game, Main.UpdateScriptURL, true)
+			local updateUrl = Main.GetUpdateScriptURL()
+			if not updateUrl then return false end
+			local ok, result = pcall(oldgame.HttpGet, game, updateUrl, true)
 			if ok then source = result end
 		end
 		if type(source) ~= "string" or source == "" then return false end
@@ -2042,7 +2094,10 @@ Main = (function()
 		Main.UpdateCheckStarted = true
 		coroutine.wrap(function()
 			task.wait(1)
-			local ok, source = pcall(function() return game:HttpGet(Main.UpdateScriptURL, true) end)
+			local updateUrl = Main.GetUpdateScriptURL()
+			if not updateUrl then return end
+			Main.UpdateScriptURL = updateUrl
+			local ok, source = pcall(function() return game:HttpGet(updateUrl, true) end)
 			if not ok or type(source) ~= "string" or source == "" then return end
 			local latestVersion = Main.GetRemoteScriptVersion(source)
 			if not latestVersion then return end
@@ -2496,6 +2551,7 @@ Main = (function()
 					moduleData.PluginData.FriendlyName = pluginFriendlyName
 
 					table.insert(Main.Plugins, moduleData)
+					Main.CreateApp({Name = pluginFriendlyName, IconMap = Explorer.ClassIcons, Icon = "Attachment", Window = moduleData.Window})
 				end
 			end	
 		end
@@ -2540,21 +2596,23 @@ Main = (function()
 	return Main
 end)()
 
+-- Bundled Plugins
+local bundled_plugins = {
+	-- [[PLUGIN_SOURCES_PLACEHOLDER]]
+}
+
+if writefile and isfolder and makefolder then
+	if not isfolder("dex") then makefolder("dex") end
+	if not isfolder("dex/plugins") then makefolder("dex/plugins") end
+	for pluginName, pluginSource in pairs(bundled_plugins) do
+		writefile("dex/plugins/" .. pluginName, pluginSource)
+	end
+end
+
 -- Start
 Main.Init()
 
 --for i,v in pairs(Main.MissingEnv) do print(i,v) end
-
--- Rspy Plugin
-
-local plugin_src = [=[
--- [[REMOTESPY_PLUGIN_PLACEHOLDER]]
-]=]
- 
-if not isfolder("dex")         then makefolder("dex")         end
-if not isfolder("dex/plugins") then makefolder("dex/plugins") end
- 
-writefile("dex/plugins/RemoteSpy.lua", plugin_src)
 
 -- Adonis related 
 local function InitAdonisBypass()

@@ -297,6 +297,21 @@ local function main()
 		autocheckupdate.OnInput:Connect(function()
 			Settings.AutoCheckUpdate = autocheckupdate.Toggled
 		end)
+
+		local updateRef = AddTextbox("Update Ref (tag recommended)", Settings.AutoUpdateRef or "v3.1", 120)
+		updateRef.FocusLost:Connect(function()
+			local ref = tostring(updateRef.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+			if ref == "" then
+				ref = "v3.1"
+				updateRef.Text = ref
+			end
+			Settings.AutoUpdateRef = ref
+		end)
+
+		local allowBranchUpdate = AddCheckbox("Allow Main/Master Update Ref", Settings.AutoUpdateAllowBranch == true)
+		allowBranchUpdate.OnInput:Connect(function()
+			Settings.AutoUpdateAllowBranch = allowBranchUpdate.Toggled
+		end)
 		
 		local bgTransparency = AddTextbox("Background Transparency", tostring(Settings.Window.Transparency), 15)
 		bgTransparency.FocusLost:Connect(function()
@@ -356,7 +371,7 @@ local function main()
 		AddSeperator("Decompiler")
 		AddText("If executor does not support decompile, it will use the fallback option.")
 		AddText("'getbytecode' is mandatory to use fallback decompilers.")
-		AddText("Local C++ Helper handles /script, /deobfuscate and /log; it does not decompile bytecode.")
+		AddText("Local C++ Helper handles /script, /normalize-source, /log and persistent source search; it does not decompile bytecode.")
 		local decompilerOption = {"Executor (Native)", "Konstant", "AdvancedDecompiler", "Shiny"}
 		local initialSelected = "Executor (Native)"
 		if Settings.Decompiler.PreferDecompilerFallback then

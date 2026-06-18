@@ -32,6 +32,9 @@
 #define MAX_LOG_FILE_SIZE 5242880
 #define MAX_CLIENT_THREADS 16
 
+const char* INDEX_FILE_PATH = "dex_helper_index.dat";
+const char* INDEX_MAGIC = "DEXPP_INDEX_V1";
+
 struct IndexedScript {
     std::string key;
     std::string path;
@@ -50,8 +53,8 @@ std::mutex g_script_index_mutex;
 std::mutex g_log_mutex;
 std::atomic<int> g_active_clients{0};
 
-// Fast C++ linear-time variable normalizer
-std::string deobfuscate(const std::string& source) {
+// Fast C++ linear-time variable normalizer. This is a source cleanup pass, not a full deobfuscator.
+std::string normalize_source(const std::string& source) {
     std::unordered_map<std::string, std::string> var_map;
     int var_counter = 0;
 
@@ -461,6 +464,8 @@ std::string assign_role(const std::string& task) {
     return json.str();
 }
 
+bool save_index_locked();
+
 std::string index_source_payload(const std::string& body) {
     auto parts = split_header_payload(body, 4);
     if (parts.size() != 5 || parts[0].empty()) {
@@ -485,11 +490,13 @@ std::string index_source_payload(const std::string& body) {
 
     size_t bytes = 0;
     for (const auto& item : g_script_index) bytes += item.second.source.size();
+    bool saved = save_index_locked();
 
     std::stringstream json;
     json << "{\"ok\":true,\"total\":" << g_script_index.size()
          << ",\"bytes\":" << bytes
          << ",\"updatedAt\":" << static_cast<long long>(updated_at)
+         << ",\"persisted\":" << (saved ? "true" : "false")
          << "}";
     return json.str();
 }
@@ -621,6 +628,127 @@ std::string search_index(const std::string& body) {
         json << "\"analysis\":" << entry.analysis << "}";
     }
     json << "]}";
+    return json.str();
+}
+
+void write_field(std::ostream& out, const std::string& value) {
+    out << value.size() << "\n";
+    out.write(value.data(), static_cast<std::streamsize>(value.size()));
+    out << "\n";
+}
+
+bool read_field(std::istream& in, std::string& value) {
+    std::string length_line;
+    if (!std::getline(in, length_line)) return false;
+    if (!length_line.empty() && length_line.back() == '\r') length_line.pop_back();
+
+    size_t length = 0;
+    try {
+        length = static_cast<size_t>(std::stoull(length_line));
+    } catch (...) {
+        return false;
+    }
+
+    value.assign(length, '\0');
+    if (length > 0) {
+        in.read(&value[0], static_cast<std::streamsize>(length));
+        if (static_cast<size_t>(in.gcount()) != length) return false;
+    }
+
+    char newline = '\0';
+    in.get(newline);
+    return newline == '\n';
+}
+
+bool save_index_locked() {
+    std::ofstream out(INDEX_FILE_PATH, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) return false;
+
+    out << INDEX_MAGIC << "\n";
+    out << g_script_index.size() << "\n";
+    for (const auto& item : g_script_index) {
+        const IndexedScript& entry = item.second;
+        write_field(out, entry.key);
+        write_field(out, entry.path);
+        write_field(out, entry.name);
+        write_field(out, entry.class_name);
+        write_field(out, entry.source);
+        out << static_cast<long long>(entry.updated_at) << "\n";
+    }
+    return out.good();
+}
+
+std::string save_index_response() {
+    std::lock_guard<std::mutex> lock(g_script_index_mutex);
+    bool ok = save_index_locked();
+    std::stringstream json;
+    json << "{\"ok\":" << (ok ? "true" : "false")
+         << ",\"scripts\":" << g_script_index.size()
+         << ",\"file\":\"" << escape_json(INDEX_FILE_PATH) << "\"}";
+    return json.str();
+}
+
+std::string load_index_response() {
+    std::ifstream in(INDEX_FILE_PATH, std::ios::binary);
+    if (!in.is_open()) {
+        return "{\"ok\":false,\"error\":\"index file not found\",\"scripts\":0}";
+    }
+
+    std::string magic;
+    if (!std::getline(in, magic) || magic != INDEX_MAGIC) {
+        return "{\"ok\":false,\"error\":\"invalid index file\",\"scripts\":0}";
+    }
+
+    std::string count_line;
+    if (!std::getline(in, count_line)) {
+        return "{\"ok\":false,\"error\":\"missing index count\",\"scripts\":0}";
+    }
+
+    size_t count = 0;
+    try {
+        count = static_cast<size_t>(std::stoull(count_line));
+    } catch (...) {
+        return "{\"ok\":false,\"error\":\"invalid index count\",\"scripts\":0}";
+    }
+
+    std::unordered_map<std::string, IndexedScript> loaded;
+    for (size_t i = 0; i < count; ++i) {
+        IndexedScript entry;
+        if (!read_field(in, entry.key) ||
+            !read_field(in, entry.path) ||
+            !read_field(in, entry.name) ||
+            !read_field(in, entry.class_name) ||
+            !read_field(in, entry.source)) {
+            return "{\"ok\":false,\"error\":\"truncated index entry\",\"scripts\":0}";
+        }
+
+        std::string updated_line;
+        if (!std::getline(in, updated_line)) {
+            return "{\"ok\":false,\"error\":\"missing index timestamp\",\"scripts\":0}";
+        }
+        try {
+            entry.updated_at = static_cast<std::time_t>(std::stoll(updated_line));
+        } catch (...) {
+            entry.updated_at = std::time(nullptr);
+        }
+
+        entry.lower_source = lower_copy(entry.source);
+        entry.lower_path = lower_copy(entry.path);
+        entry.analysis = analyze_source(entry.source);
+        entry.top_identifiers = top_identifiers(entry.source, 12);
+        if (!entry.key.empty()) {
+            loaded[entry.key] = std::move(entry);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_script_index_mutex);
+        g_script_index = std::move(loaded);
+    }
+
+    std::stringstream json;
+    json << "{\"ok\":true,\"scripts\":" << count
+         << ",\"file\":\"" << escape_json(INDEX_FILE_PATH) << "\"}";
     return json.str();
 }
 
@@ -794,9 +922,8 @@ void handle_client(SOCKET ClientSocket) {
                 log_file.close();
             }
             send_response(ClientSocket, 200, "OK", "Logged");
-        } else if (path == "/deobfuscate" && method == "POST") {
-            std::string deobf = deobfuscate(body);
-            send_response(ClientSocket, 200, "OK", deobf);
+        } else if ((path == "/normalize-source" || path == "/deobfuscate") && method == "POST") {
+            send_response(ClientSocket, 200, "OK", normalize_source(body));
         } else if (path == "/analyze-source" && method == "POST") {
             send_response(ClientSocket, 200, "OK", analyze_source(body));
         } else if (path == "/index-source" && method == "POST") {
@@ -805,10 +932,15 @@ void handle_client(SOCKET ClientSocket) {
             send_response(ClientSocket, 200, "OK", search_index(body));
         } else if (path == "/index-status" && method == "GET") {
             send_response(ClientSocket, 200, "OK", index_status());
+        } else if (path == "/index-save" && method == "POST") {
+            send_response(ClientSocket, 200, "OK", save_index_response());
+        } else if (path == "/index-load" && method == "POST") {
+            send_response(ClientSocket, 200, "OK", load_index_response());
         } else if (path == "/index-clear" && method == "POST") {
             std::lock_guard<std::mutex> lock(g_script_index_mutex);
             g_script_index.clear();
-            send_response(ClientSocket, 200, "OK", "{\"ok\":true,\"total\":0}");
+            bool saved = save_index_locked();
+            send_response(ClientSocket, 200, "OK", saved ? "{\"ok\":true,\"total\":0,\"persisted\":true}" : "{\"ok\":true,\"total\":0,\"persisted\":false}");
         } else if (path == "/assign-role" && method == "POST") {
             send_response(ClientSocket, 200, "OK", assign_role(body));
         } else if (path == "/decompile" && method == "POST") {
@@ -816,7 +948,7 @@ void handle_client(SOCKET ClientSocket) {
                 ClientSocket,
                 501,
                 "Not Implemented",
-                "DEX++ Helper does not include a bytecode decompiler. It serves local script delivery, log, deobfuscate, source analysis, and source index/search."
+                "DEX++ Helper does not include a bytecode decompiler. It serves local script delivery, log, source normalization, source analysis, and persistent source index/search."
             );
         } else {
             send_response(ClientSocket, 404, "Not Found", "404 Route Not Found");
@@ -886,7 +1018,9 @@ int main() {
         return 1;
     }
 
+    std::string load_result = load_index_response();
     std::cout << "DEX++ C++ Local Helper Server listening on port " << DEFAULT_PORT << "..." << std::endl;
+    std::cout << "Index load: " << load_result << std::endl;
 
     while (true) {
         // Accept a client socket

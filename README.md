@@ -8,15 +8,20 @@ DarkDEX++ can run independently using the `DEX++_compiled.luau` file, or fetch t
 
 - `GET /status`: Checks if the server is running.
 - `GET /script`: Returns the content of `DEX++_compiled.luau` to be loaded locally via `loadstring`.
-- `POST /deobfuscate`: Post-processes decompiled source code (e.g., renaming variables).
+- `POST /normalize-source`: Runs a lightweight source normalization pass, currently focused on readable variable renaming.
+- `POST /deobfuscate`: Compatibility alias for `/normalize-source`.
 - `POST /analyze-source`: Quickly analyzes raw/cached source code and returns a JSON object containing the line count, function count, remote calls, risk signals, and prominent identifiers.
 - `POST /index-source`: Stores a cached source file in the helper's in-memory analysis index.
 - `POST /search-source`: Searches the helper's in-memory source index and returns ranked JSON results.
 - `GET /index-status`: Returns the current in-memory index size.
+- `POST /index-save`: Persists the helper source index to `dex_helper_index.dat`.
+- `POST /index-load`: Reloads the helper source index from `dex_helper_index.dat`.
 - `POST /index-clear`: Clears the helper's in-memory source index.
 - `POST /log`: Records logs from the Property Tracker into `dex_server_logs.txt`.
 
 The helper accepts multiple local clients concurrently, with a small worker cap to keep indexing/search/status/log requests responsive without letting request spikes create unlimited threads.
+
+Update checks are pinned by `Settings.AutoUpdateRef` by default (`v3.1`). Branch refs such as `main` or `master` are ignored unless `Settings.AutoUpdateAllowBranch` is explicitly enabled, so auto-update does not silently track a moving branch.
 
 Important: This C++ helper is **not a bytecode decompiler**. It does not possess an engine to decompile Roblox bytecode into Luau source code, so it does not directly speed up the `decompile(script)` step. The decompile speed still depends on your executor's native decompiler, the Shiny/lua.expert fallbacks, and DarkDEX++'s built-in cache.
 
@@ -58,20 +63,20 @@ The most effective approach currently is using the following pipeline:
 - Only decompile scripts that have not been cached yet.
 - Use `ClientIndex` so that tools avoid scanning the instance tree repeatedly.
 - Prioritize decompiling the script that is currently open/clicked first.
-- Deobfuscate, run `analyze-source`, and push cached source into the helper index after the source code is retrieved.
+- Normalize source, run `analyze-source`, and push cached source into the helper index after the source code is retrieved.
 
 ## Local Analysis Engine
 
 When `DEX_Helper.exe` is running, `Code Search > Index Scripts` now delegates extra work to the helper:
 
 - decompiled/cached source is sent to `/index-source`;
-- the helper keeps a fast in-memory index for the current helper session;
+- the helper keeps a fast in-memory index and persists it to `dex_helper_index.dat`;
 - `Code Search` and shared `ClientIndex.SearchCached` prefer `/search-source`;
 - helper search results include match type, score, confidence, freshness, source snippets, and compact source analysis;
 - `Client Intelligence > Index` shows helper index health, local cache coverage, and live client-surface coverage;
 - if the helper is offline or the helper index is empty, DarkDEX++ falls back to the old Luau cache scan.
 
-This is intentionally session-local RAM state. It avoids background scanning and avoids keeping another database process alive. Restarting the helper clears the helper-side index; running `Index Scripts` rebuilds it.
+The helper loads `dex_helper_index.dat` on startup. Running `Index Scripts` refreshes entries and saves the updated helper index automatically.
 
 ## Task Router
 
@@ -81,6 +86,15 @@ This is intentionally session-local RAM state. It avoids background scanning and
 - Luau UI for selection, trees, buttons, and immediate interactions;
 - runtime monitor roles for live client data and timelines;
 - AI context packaging when you want a clean prompt or handoff.
+
+## Plugin Experiments
+
+The build scripts now bundle every `.lua`/`.luau` file under `Plugins/` into `dex/plugins/` before DEX++ starts. This means experimental tools can live as plugins instead of being added directly to the core module list.
+
+Current bundled plugins:
+
+- `RemoteSpy.lua`
+- `TaskRouterLab.lua`
 
 ## Copy to AI + helper analysis
 
