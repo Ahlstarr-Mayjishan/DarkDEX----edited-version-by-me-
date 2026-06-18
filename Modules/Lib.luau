@@ -4311,7 +4311,9 @@ local function main()
 			if #text > 0 then
 				editBox:CaptureFocus()
 			end
-			self.EditBoxCopying = false
+			task.defer(function()
+				self.EditBoxCopying = false
+			end)
 			if self.OnSelectionChanged then self.OnSelectionChanged:Fire(text) end
 		end
 

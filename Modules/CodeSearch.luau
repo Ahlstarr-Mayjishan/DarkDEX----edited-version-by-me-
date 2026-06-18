@@ -35,7 +35,7 @@ end
 
 local function main()
 	local CodeSearch = {}
-	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton
+	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, resultContextMenu
 	local indexing = false
 	local searching = false
 	local cancelRequested = false
@@ -624,7 +624,85 @@ local function main()
 		end)
 		row.MouseButton2Click:Connect(function()
 			selectRecord(record, row)
-			if sidePanel then sidePanel.Visible = true end
+			
+			local menu = getResultContextMenu()
+			menu:Clear()
+			menu:Add({
+				Name = "Open",
+				OnClick = function() openScript(record) end
+			})
+			menu:Add({
+				Name = "Focus in Explorer",
+				OnClick = function() showInExplorer(record) end
+			})
+			menu:AddDivider()
+			menu:Add({
+				Name = "Copy Path",
+				OnClick = function() copyText(getRecordPath(record), "Copied path.") end
+			})
+			menu:Add({
+				Name = "Copy Source",
+				OnClick = function()
+					local source = readRecordSource(record)
+					if source then copyText(source, "Copied source.") else setStatus("Source is unavailable.") end
+				end
+			})
+			menu:Add({
+				Name = "Copy AI Context",
+				OnClick = function() copyText(buildAIContext(record), "Copied AI context.") end
+			})
+			menu:AddDivider()
+			menu:Add({
+				Name = "Save to File",
+				OnClick = function() saveRecordToFile(record) end
+			})
+			menu:Add({
+				Name = "Direct File Path",
+				OnClick = function()
+					local filePath = saveRecordToFile(record)
+					if filePath then copyText(filePath, "Saved and copied file path.") end
+				end
+			})
+			menu:AddDivider()
+			menu:Add({
+				Name = "Find References",
+				OnClick = function() findReferences(record) end
+			})
+			menu:Add({
+				Name = "Show Relations",
+				OnClick = function() openRelations(record) end
+			})
+			menu:Add({
+				Name = "Dependency Graph",
+				OnClick = function() openDependencyGraph(record) end
+			})
+			menu:Add({
+				Name = "Inspect Return",
+				OnClick = function() inspectModuleReturn(record) end
+			})
+			menu:AddDivider()
+			menu:Add({
+				Name = pinnedKeys[record.Key] and "Unpin" or "Pin",
+				OnClick = function()
+					pinnedKeys[record.Key] = not pinnedKeys[record.Key]
+					setStatus(pinnedKeys[record.Key] and "Pinned result." or "Unpinned result.")
+					updateRowState(row, record)
+				end
+			})
+			menu:Add({
+				Name = reviewedKeys[record.Key] and "Mark Unreviewed" or "Mark Reviewed",
+				OnClick = function()
+					reviewedKeys[record.Key] = not reviewedKeys[record.Key]
+					setStatus(reviewedKeys[record.Key] and "Marked as reviewed." or "Marked as not reviewed.")
+					updateRowState(row, record)
+				end
+			})
+			menu:AddDivider()
+			menu:Add({
+				Name = "Export All Results",
+				OnClick = function() exportAllResults() end
+			})
+			menu:Show()
 		end)
 	end
 
@@ -999,7 +1077,7 @@ local function main()
 		resultsFrame.Position = UDim2.new(0,0,0,58)
 		resultsFrame.ScrollBarImageColor3 = Color3.fromRGB(70,70,70)
 		resultsFrame.ScrollBarThickness = 10
-		resultsFrame.Size = UDim2.new(1,-260,1,-58)
+		resultsFrame.Size = UDim2.new(1,0,1,-58)
 		resultsFrame.TopImage = ""
 		resultsFrame.Parent = content
 
@@ -1014,140 +1092,6 @@ local function main()
 		padding.PaddingRight = UDim.new(0,4)
 		padding.PaddingTop = UDim.new(0,4)
 		padding.Parent = resultsFrame
-
-		sidePanel = Instance.new("Frame")
-		sidePanel.BackgroundColor3 = Settings.Theme.Main1
-		sidePanel.BorderColor3 = Settings.Theme.Outline1
-		sidePanel.Position = UDim2.new(1,-260,0,58)
-		sidePanel.Size = UDim2.new(0,260,1,-58)
-		sidePanel.Parent = content
-
-		local sidePad = Instance.new("UIPadding")
-		sidePad.PaddingLeft = UDim.new(0,8)
-		sidePad.PaddingRight = UDim.new(0,8)
-		sidePad.PaddingTop = UDim.new(0,8)
-		sidePad.PaddingBottom = UDim.new(0,8)
-		sidePad.Parent = sidePanel
-
-		sideTitle = Instance.new("TextLabel")
-		sideTitle.BackgroundTransparency = 1
-		sideTitle.Font = Enum.Font.SourceSansBold
-		sideTitle.Position = UDim2.new(0,0,0,0)
-		sideTitle.Size = UDim2.new(1,0,0,20)
-		sideTitle.Text = "Result inspector"
-		sideTitle.TextColor3 = Settings.Theme.Text
-		sideTitle.TextSize = 15
-		sideTitle.TextTruncate = Enum.TextTruncate.AtEnd
-		sideTitle.TextXAlignment = Enum.TextXAlignment.Left
-		sideTitle.Parent = sidePanel
-
-		sidePath = Instance.new("TextLabel")
-		sidePath.BackgroundTransparency = 1
-		sidePath.Font = Enum.Font.Code
-		sidePath.Position = UDim2.new(0,0,0,22)
-		sidePath.Size = UDim2.new(1,0,0,34)
-		sidePath.Text = "Right-click a result to inspect actions."
-		sidePath.TextColor3 = Settings.Theme.PlaceholderText
-		sidePath.TextSize = 11
-		sidePath.TextWrapped = true
-		sidePath.TextXAlignment = Enum.TextXAlignment.Left
-		sidePath.TextYAlignment = Enum.TextYAlignment.Top
-		sidePath.Parent = sidePanel
-
-		sideMeta = Instance.new("TextLabel")
-		sideMeta.BackgroundTransparency = 1
-		sideMeta.Font = Enum.Font.SourceSans
-		sideMeta.Position = UDim2.new(0,0,0,58)
-		sideMeta.Size = UDim2.new(1,0,0,18)
-		sideMeta.Text = "No result selected."
-		sideMeta.TextColor3 = Settings.Theme.PlaceholderText
-		sideMeta.TextSize = 12
-		sideMeta.TextTruncate = Enum.TextTruncate.AtEnd
-		sideMeta.TextXAlignment = Enum.TextXAlignment.Left
-		sideMeta.Parent = sidePanel
-
-		sideBadges = Instance.new("TextLabel")
-		sideBadges.BackgroundTransparency = 1
-		sideBadges.Font = Enum.Font.SourceSansBold
-		sideBadges.Position = UDim2.new(0,0,0,78)
-		sideBadges.Size = UDim2.new(1,0,0,18)
-		sideBadges.Text = ""
-		sideBadges.TextColor3 = Settings.Theme.Highlight
-		sideBadges.TextSize = 12
-		sideBadges.TextTruncate = Enum.TextTruncate.AtEnd
-		sideBadges.TextXAlignment = Enum.TextXAlignment.Left
-		sideBadges.Parent = sidePanel
-
-		local function actionButton(text, col, row, callback)
-			local x = col == 1 and 0 or 122
-			local button = makeButton(sidePanel, text, UDim2.new(0,x,0,102 + row * 26), UDim2.new(0,116,0,22))
-			button.TextSize = 12
-			button.MouseButton1Click:Connect(function()
-				if text ~= "Export All" and not selectedRecord then
-					setStatus("Select a search result first.")
-					return
-				end
-				callback(selectedRecord)
-				if selectedRow and selectedRecord then updateRowState(selectedRow, selectedRecord) end
-				updateInspector(selectedRecord)
-			end)
-			return button
-		end
-
-		actionButton("Open", 1, 0, openScript)
-		actionButton("Explorer", 2, 0, showInExplorer)
-		actionButton("Copy Path", 1, 1, function(record) copyText(getRecordPath(record), "Copied path.") end)
-		actionButton("Copy Source", 2, 1, function(record)
-			local source = readRecordSource(record)
-			if source then copyText(source, "Copied source.") else setStatus("Source is unavailable.") end
-		end)
-		actionButton("Copy AI", 1, 2, function(record) copyText(buildAIContext(record), "Copied AI context.") end)
-		actionButton("Save File", 2, 2, saveRecordToFile)
-		actionButton("Direct File", 1, 3, function(record)
-			local filePath = saveRecordToFile(record)
-			if filePath then copyText(filePath, "Saved and copied file path.") end
-		end)
-		actionButton("References", 2, 3, findReferences)
-		actionButton("Relations", 1, 4, openRelations)
-		actionButton("Dep Graph", 2, 4, function() openDependencyGraph() end)
-		actionButton("Inspect Return", 1, 5, inspectModuleReturn)
-		actionButton("Pin", 2, 5, function(record)
-			pinnedKeys[record.Key] = not pinnedKeys[record.Key]
-			setStatus(pinnedKeys[record.Key] and "Pinned result." or "Unpinned result.")
-		end)
-		actionButton("Reviewed", 1, 6, function(record)
-			reviewedKeys[record.Key] = not reviewedKeys[record.Key]
-			setStatus(reviewedKeys[record.Key] and "Marked as reviewed." or "Marked as not reviewed.")
-		end)
-		actionButton("Export All", 2, 6, function() exportAllResults() end)
-
-		local previewFrame = Instance.new("ScrollingFrame")
-		previewFrame.Active = true
-		previewFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-		previewFrame.BackgroundColor3 = Settings.Theme.Main2
-		previewFrame.BorderColor3 = Settings.Theme.Outline1
-		previewFrame.BottomImage = ""
-		previewFrame.CanvasSize = UDim2.new(0,0,0,0)
-		previewFrame.Position = UDim2.new(0,0,0,294)
-		previewFrame.ScrollBarImageColor3 = Color3.fromRGB(70,70,70)
-		previewFrame.ScrollBarThickness = 6
-		previewFrame.Size = UDim2.new(1,0,1,-294)
-		previewFrame.TopImage = ""
-		previewFrame.Parent = sidePanel
-
-		sidePreview = Instance.new("TextLabel")
-		sidePreview.AutomaticSize = Enum.AutomaticSize.Y
-		sidePreview.BackgroundTransparency = 1
-		sidePreview.Font = Enum.Font.Code
-		sidePreview.Position = UDim2.new(0,6,0,6)
-		sidePreview.Size = UDim2.new(1,-18,0,0)
-		sidePreview.Text = ""
-		sidePreview.TextColor3 = Settings.Theme.Text
-		sidePreview.TextSize = 11
-		sidePreview.TextWrapped = true
-		sidePreview.TextXAlignment = Enum.TextXAlignment.Left
-		sidePreview.TextYAlignment = Enum.TextYAlignment.Top
-		sidePreview.Parent = previewFrame
 
 		indexButton.MouseButton1Click:Connect(CodeSearch.IndexScripts)
 		searchButton.MouseButton1Click:Connect(CodeSearch.Search)

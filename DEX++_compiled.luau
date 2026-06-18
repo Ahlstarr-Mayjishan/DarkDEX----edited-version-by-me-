@@ -1306,7 +1306,7 @@ end,
     	local expanded
     	local entryTemplate,treeFrame,toolBar,descendantAddedCon,descendantRemovingCon,itemChangedCon
     	local ffa = game.FindFirstAncestorWhichIsA
-    	local getDescendants = game.GetDescendants
+    	local getDescendants = function(obj) return obj:GetDescendants() end
     	local getTextSize = service.TextService.GetTextSize
     	local updateDebounce,refreshDebounce = false,false
     	local nilNode = {Obj = Instance.new("Folder")}
@@ -8609,7 +8609,9 @@ end,
     			if #text > 0 then
     				editBox:CaptureFocus()
     			end
-    			self.EditBoxCopying = false
+    			task.defer(function()
+    				self.EditBoxCopying = false
+    			end)
     			if self.OnSelectionChanged then self.OnSelectionChanged:Fire(text) end
     		end
     
@@ -15436,7 +15438,7 @@ end,
     
     local function main()
     	local CodeSearch = {}
-    	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton
+    	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, resultContextMenu
     	local indexing = false
     	local searching = false
     	local cancelRequested = false
@@ -16025,7 +16027,85 @@ end,
     		end)
     		row.MouseButton2Click:Connect(function()
     			selectRecord(record, row)
-    			if sidePanel then sidePanel.Visible = true end
+    			
+    			local menu = getResultContextMenu()
+    			menu:Clear()
+    			menu:Add({
+    				Name = "Open",
+    				OnClick = function() openScript(record) end
+    			})
+    			menu:Add({
+    				Name = "Focus in Explorer",
+    				OnClick = function() showInExplorer(record) end
+    			})
+    			menu:AddDivider()
+    			menu:Add({
+    				Name = "Copy Path",
+    				OnClick = function() copyText(getRecordPath(record), "Copied path.") end
+    			})
+    			menu:Add({
+    				Name = "Copy Source",
+    				OnClick = function()
+    					local source = readRecordSource(record)
+    					if source then copyText(source, "Copied source.") else setStatus("Source is unavailable.") end
+    				end
+    			})
+    			menu:Add({
+    				Name = "Copy AI Context",
+    				OnClick = function() copyText(buildAIContext(record), "Copied AI context.") end
+    			})
+    			menu:AddDivider()
+    			menu:Add({
+    				Name = "Save to File",
+    				OnClick = function() saveRecordToFile(record) end
+    			})
+    			menu:Add({
+    				Name = "Direct File Path",
+    				OnClick = function()
+    					local filePath = saveRecordToFile(record)
+    					if filePath then copyText(filePath, "Saved and copied file path.") end
+    				end
+    			})
+    			menu:AddDivider()
+    			menu:Add({
+    				Name = "Find References",
+    				OnClick = function() findReferences(record) end
+    			})
+    			menu:Add({
+    				Name = "Show Relations",
+    				OnClick = function() openRelations(record) end
+    			})
+    			menu:Add({
+    				Name = "Dependency Graph",
+    				OnClick = function() openDependencyGraph(record) end
+    			})
+    			menu:Add({
+    				Name = "Inspect Return",
+    				OnClick = function() inspectModuleReturn(record) end
+    			})
+    			menu:AddDivider()
+    			menu:Add({
+    				Name = pinnedKeys[record.Key] and "Unpin" or "Pin",
+    				OnClick = function()
+    					pinnedKeys[record.Key] = not pinnedKeys[record.Key]
+    					setStatus(pinnedKeys[record.Key] and "Pinned result." or "Unpinned result.")
+    					updateRowState(row, record)
+    				end
+    			})
+    			menu:Add({
+    				Name = reviewedKeys[record.Key] and "Mark Unreviewed" or "Mark Reviewed",
+    				OnClick = function()
+    					reviewedKeys[record.Key] = not reviewedKeys[record.Key]
+    					setStatus(reviewedKeys[record.Key] and "Marked as reviewed." or "Marked as not reviewed.")
+    					updateRowState(row, record)
+    				end
+    			})
+    			menu:AddDivider()
+    			menu:Add({
+    				Name = "Export All Results",
+    				OnClick = function() exportAllResults() end
+    			})
+    			menu:Show()
     		end)
     	end
     
@@ -16400,7 +16480,7 @@ end,
     		resultsFrame.Position = UDim2.new(0,0,0,58)
     		resultsFrame.ScrollBarImageColor3 = Color3.fromRGB(70,70,70)
     		resultsFrame.ScrollBarThickness = 10
-    		resultsFrame.Size = UDim2.new(1,-260,1,-58)
+    		resultsFrame.Size = UDim2.new(1,0,1,-58)
     		resultsFrame.TopImage = ""
     		resultsFrame.Parent = content
     
@@ -16415,140 +16495,6 @@ end,
     		padding.PaddingRight = UDim.new(0,4)
     		padding.PaddingTop = UDim.new(0,4)
     		padding.Parent = resultsFrame
-    
-    		sidePanel = Instance.new("Frame")
-    		sidePanel.BackgroundColor3 = Settings.Theme.Main1
-    		sidePanel.BorderColor3 = Settings.Theme.Outline1
-    		sidePanel.Position = UDim2.new(1,-260,0,58)
-    		sidePanel.Size = UDim2.new(0,260,1,-58)
-    		sidePanel.Parent = content
-    
-    		local sidePad = Instance.new("UIPadding")
-    		sidePad.PaddingLeft = UDim.new(0,8)
-    		sidePad.PaddingRight = UDim.new(0,8)
-    		sidePad.PaddingTop = UDim.new(0,8)
-    		sidePad.PaddingBottom = UDim.new(0,8)
-    		sidePad.Parent = sidePanel
-    
-    		sideTitle = Instance.new("TextLabel")
-    		sideTitle.BackgroundTransparency = 1
-    		sideTitle.Font = Enum.Font.SourceSansBold
-    		sideTitle.Position = UDim2.new(0,0,0,0)
-    		sideTitle.Size = UDim2.new(1,0,0,20)
-    		sideTitle.Text = "Result inspector"
-    		sideTitle.TextColor3 = Settings.Theme.Text
-    		sideTitle.TextSize = 15
-    		sideTitle.TextTruncate = Enum.TextTruncate.AtEnd
-    		sideTitle.TextXAlignment = Enum.TextXAlignment.Left
-    		sideTitle.Parent = sidePanel
-    
-    		sidePath = Instance.new("TextLabel")
-    		sidePath.BackgroundTransparency = 1
-    		sidePath.Font = Enum.Font.Code
-    		sidePath.Position = UDim2.new(0,0,0,22)
-    		sidePath.Size = UDim2.new(1,0,0,34)
-    		sidePath.Text = "Right-click a result to inspect actions."
-    		sidePath.TextColor3 = Settings.Theme.PlaceholderText
-    		sidePath.TextSize = 11
-    		sidePath.TextWrapped = true
-    		sidePath.TextXAlignment = Enum.TextXAlignment.Left
-    		sidePath.TextYAlignment = Enum.TextYAlignment.Top
-    		sidePath.Parent = sidePanel
-    
-    		sideMeta = Instance.new("TextLabel")
-    		sideMeta.BackgroundTransparency = 1
-    		sideMeta.Font = Enum.Font.SourceSans
-    		sideMeta.Position = UDim2.new(0,0,0,58)
-    		sideMeta.Size = UDim2.new(1,0,0,18)
-    		sideMeta.Text = "No result selected."
-    		sideMeta.TextColor3 = Settings.Theme.PlaceholderText
-    		sideMeta.TextSize = 12
-    		sideMeta.TextTruncate = Enum.TextTruncate.AtEnd
-    		sideMeta.TextXAlignment = Enum.TextXAlignment.Left
-    		sideMeta.Parent = sidePanel
-    
-    		sideBadges = Instance.new("TextLabel")
-    		sideBadges.BackgroundTransparency = 1
-    		sideBadges.Font = Enum.Font.SourceSansBold
-    		sideBadges.Position = UDim2.new(0,0,0,78)
-    		sideBadges.Size = UDim2.new(1,0,0,18)
-    		sideBadges.Text = ""
-    		sideBadges.TextColor3 = Settings.Theme.Highlight
-    		sideBadges.TextSize = 12
-    		sideBadges.TextTruncate = Enum.TextTruncate.AtEnd
-    		sideBadges.TextXAlignment = Enum.TextXAlignment.Left
-    		sideBadges.Parent = sidePanel
-    
-    		local function actionButton(text, col, row, callback)
-    			local x = col == 1 and 0 or 122
-    			local button = makeButton(sidePanel, text, UDim2.new(0,x,0,102 + row * 26), UDim2.new(0,116,0,22))
-    			button.TextSize = 12
-    			button.MouseButton1Click:Connect(function()
-    				if text ~= "Export All" and not selectedRecord then
-    					setStatus("Select a search result first.")
-    					return
-    				end
-    				callback(selectedRecord)
-    				if selectedRow and selectedRecord then updateRowState(selectedRow, selectedRecord) end
-    				updateInspector(selectedRecord)
-    			end)
-    			return button
-    		end
-    
-    		actionButton("Open", 1, 0, openScript)
-    		actionButton("Explorer", 2, 0, showInExplorer)
-    		actionButton("Copy Path", 1, 1, function(record) copyText(getRecordPath(record), "Copied path.") end)
-    		actionButton("Copy Source", 2, 1, function(record)
-    			local source = readRecordSource(record)
-    			if source then copyText(source, "Copied source.") else setStatus("Source is unavailable.") end
-    		end)
-    		actionButton("Copy AI", 1, 2, function(record) copyText(buildAIContext(record), "Copied AI context.") end)
-    		actionButton("Save File", 2, 2, saveRecordToFile)
-    		actionButton("Direct File", 1, 3, function(record)
-    			local filePath = saveRecordToFile(record)
-    			if filePath then copyText(filePath, "Saved and copied file path.") end
-    		end)
-    		actionButton("References", 2, 3, findReferences)
-    		actionButton("Relations", 1, 4, openRelations)
-    		actionButton("Dep Graph", 2, 4, function() openDependencyGraph() end)
-    		actionButton("Inspect Return", 1, 5, inspectModuleReturn)
-    		actionButton("Pin", 2, 5, function(record)
-    			pinnedKeys[record.Key] = not pinnedKeys[record.Key]
-    			setStatus(pinnedKeys[record.Key] and "Pinned result." or "Unpinned result.")
-    		end)
-    		actionButton("Reviewed", 1, 6, function(record)
-    			reviewedKeys[record.Key] = not reviewedKeys[record.Key]
-    			setStatus(reviewedKeys[record.Key] and "Marked as reviewed." or "Marked as not reviewed.")
-    		end)
-    		actionButton("Export All", 2, 6, function() exportAllResults() end)
-    
-    		local previewFrame = Instance.new("ScrollingFrame")
-    		previewFrame.Active = true
-    		previewFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    		previewFrame.BackgroundColor3 = Settings.Theme.Main2
-    		previewFrame.BorderColor3 = Settings.Theme.Outline1
-    		previewFrame.BottomImage = ""
-    		previewFrame.CanvasSize = UDim2.new(0,0,0,0)
-    		previewFrame.Position = UDim2.new(0,0,0,294)
-    		previewFrame.ScrollBarImageColor3 = Color3.fromRGB(70,70,70)
-    		previewFrame.ScrollBarThickness = 6
-    		previewFrame.Size = UDim2.new(1,0,1,-294)
-    		previewFrame.TopImage = ""
-    		previewFrame.Parent = sidePanel
-    
-    		sidePreview = Instance.new("TextLabel")
-    		sidePreview.AutomaticSize = Enum.AutomaticSize.Y
-    		sidePreview.BackgroundTransparency = 1
-    		sidePreview.Font = Enum.Font.Code
-    		sidePreview.Position = UDim2.new(0,6,0,6)
-    		sidePreview.Size = UDim2.new(1,-18,0,0)
-    		sidePreview.Text = ""
-    		sidePreview.TextColor3 = Settings.Theme.Text
-    		sidePreview.TextSize = 11
-    		sidePreview.TextWrapped = true
-    		sidePreview.TextXAlignment = Enum.TextXAlignment.Left
-    		sidePreview.TextYAlignment = Enum.TextYAlignment.Top
-    		sidePreview.Parent = previewFrame
     
     		indexButton.MouseButton1Click:Connect(CodeSearch.IndexScripts)
     		searchButton.MouseButton1Click:Connect(CodeSearch.Search)
@@ -22289,6 +22235,39 @@ Main = (function()
 	local raw_hookmetamethod = getgenv().hookmetamethod
 	local raw_hookfunction = getgenv().hookfunction
 
+	local appCategories = {
+		["Explorer"] = "Core",
+		["Properties"] = "Core",
+		["Click part to select"] = "Core",
+		["Notepad"] = "Core",
+		["Console"] = "Core",
+		["Save Instance"] = "Core",
+		["Settings"] = "Core",
+
+		["Remote Usage"] = "Spy & Hook",
+		["Runtime Inspector"] = "Spy & Hook",
+		["Activity Map"] = "Spy & Hook",
+
+		["Code Search"] = "Search & Info",
+		["Script Relations"] = "Search & Info",
+		["Object Links"] = "Search & Info",
+		["Dependency Graph"] = "Search & Info",
+		["Smart Search"] = "Search & Info",
+		["Client Intelligence"] = "Search & Info",
+		["Inspector Hub"] = "Search & Info",
+
+		["3D Viewer"] = "Advanced",
+		["Image Viewer"] = "Advanced",
+		["Task Router"] = "Advanced",
+		["Control Center"] = "Advanced",
+		["Security Auditor"] = "Advanced",
+		["Property Tracker"] = "Advanced",
+		["Thread Manager"] = "Advanced",
+		["Serialize Inst"] = "Advanced",
+	}
+
+	local currentCategory = "All"
+
 	local table_clear = table.clear or function(t)
 		for k in pairs(t) do
 			t[k] = nil
@@ -24670,7 +24649,14 @@ Main = (function()
 		local total = 0
 		for _, card in ipairs(Main.AppCards) do
 			total = total + 1
-			local isVisible = query == "" or string.find(card.SearchText, query, 1, true) ~= nil
+			local category = appCategories[card.Name] or "Advanced"
+			local categoryMatch = (currentCategory == "All") or 
+								  (currentCategory == "Core" and category == "Core") or
+								  (currentCategory == "Spy" and category == "Spy & Hook") or
+								  (currentCategory == "Search" and category == "Search & Info") or
+								  (currentCategory == "Advanced" and category == "Advanced")
+
+			local isVisible = categoryMatch and (query == "" or string.find(card.SearchText, query, 1, true) ~= nil)
 			if Main.HiddenAppsContainer and Main.AppsContainer then
 				card.Gui.Parent = isVisible and Main.AppsContainer or Main.HiddenAppsContainer
 				card.Gui.Visible = true
@@ -24680,7 +24666,7 @@ Main = (function()
 			if isVisible then visible = visible + 1 end
 		end
 		if Main.MenuCountLabel then
-			Main.MenuCountLabel.Text = query == "" and (total .. " tools") or (visible .. " / " .. total .. " tools")
+			Main.MenuCountLabel.Text = query == "" and (visible .. " tools") or (visible .. " / " .. total .. " tools")
 		end
 		Main.UpdateMenuCanvas()
 	end
@@ -24966,6 +24952,87 @@ Main = (function()
 		Main.MenuSearchBox = gui.OpenButton.MainFrame.Header.SearchBox
 		Main.MenuCountLabel = gui.OpenButton.MainFrame.BottomFrame.AppCount
 		Main.MainGuiOpen = false
+
+		-- Dynamically modify dimensions to make space for category tabs
+		local mainFrame = gui.OpenButton.MainFrame
+		local header = mainFrame.Header
+		header.Size = UDim2.new(1, 0, 0, 128)
+		mainFrame.AppsFrame.Position = UDim2.new(0.5, 0, 0, 134)
+		mainFrame.AppsFrame.Size = UDim2.new(1, -10, 1, -170)
+
+		-- Create tabs container
+		local tabContainer = Instance.new("Frame")
+		tabContainer.Name = "CategoryTabs"
+		tabContainer.BackgroundTransparency = 1
+		tabContainer.Position = UDim2.new(0, 12, 0, 92)
+		tabContainer.Size = UDim2.new(1, -24, 0, 26)
+		tabContainer.Parent = header
+
+		local tabLayout = Instance.new("UIListLayout")
+		tabLayout.FillDirection = Enum.FillDirection.Horizontal
+		tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		tabLayout.Padding = UDim.new(0, 4)
+		tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		tabLayout.Parent = tabContainer
+
+		local categories = {"All", "Core", "Spy", "Search", "Advanced"}
+		local tabButtons = {}
+
+		local function updateTabVisuals()
+			for cat, btn in pairs(tabButtons) do
+				local active = (cat == currentCategory)
+				btn.BackgroundColor3 = active and Settings.Theme.Highlight or Settings.Theme.Button
+				btn.TextColor3 = active and Settings.Theme.Text or Settings.Theme.PlaceholderText
+				local stroke = btn:FindFirstChild("UIStroke")
+				if stroke then
+					stroke.Color = active and Settings.Theme.Highlight or Settings.Theme.Outline1
+				end
+			end
+		end
+
+		for i, cat in ipairs(categories) do
+			local btn = Instance.new("TextButton")
+			btn.Name = cat .. "Tab"
+			btn.AutoButtonColor = false
+			btn.BackgroundColor3 = Settings.Theme.Button
+			btn.BorderSizePixel = 0
+			btn.Font = Enum.Font.SourceSansBold
+			btn.Size = UDim2.new(0, cat == "Advanced" and 64 or (cat == "Search" and 56 or 48), 1, 0)
+			btn.Text = cat == "Spy" and "Spy & Hook" or (cat == "Search" and "Search" or cat)
+			btn.TextColor3 = Settings.Theme.PlaceholderText
+			btn.TextSize = 11
+			btn.LayoutOrder = i
+			btn.Parent = tabContainer
+
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 6)
+			corner.Parent = btn
+
+			local stroke = Instance.new("UIStroke")
+			stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+			stroke.Color = Settings.Theme.Outline1
+			stroke.Thickness = 1
+			stroke.Transparency = 0.35
+			stroke.Parent = btn
+
+			tabButtons[cat] = btn
+
+			btn.MouseButton1Click:Connect(function()
+				currentCategory = cat
+				updateTabVisuals()
+				Main.ApplyMenuFilter()
+			end)
+
+			Lib.ButtonAnim(btn, {
+				Mode = 2,
+				StartColor = Settings.Theme.Button,
+				HoverColor = Settings.Theme.ButtonHover,
+				PressColor = Settings.Theme.ButtonPress,
+				OutlineColor = Settings.Theme.Outline2
+			})
+		end
+
+		updateTabVisuals()
 
 		local openButton = gui.OpenButton
 		openButton.BackgroundTransparency = 0.2

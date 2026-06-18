@@ -228,6 +228,39 @@ Main = (function()
 	local raw_hookmetamethod = getgenv().hookmetamethod
 	local raw_hookfunction = getgenv().hookfunction
 
+	local appCategories = {
+		["Explorer"] = "Core",
+		["Properties"] = "Core",
+		["Click part to select"] = "Core",
+		["Notepad"] = "Core",
+		["Console"] = "Core",
+		["Save Instance"] = "Core",
+		["Settings"] = "Core",
+
+		["Remote Usage"] = "Spy & Hook",
+		["Runtime Inspector"] = "Spy & Hook",
+		["Activity Map"] = "Spy & Hook",
+
+		["Code Search"] = "Search & Info",
+		["Script Relations"] = "Search & Info",
+		["Object Links"] = "Search & Info",
+		["Dependency Graph"] = "Search & Info",
+		["Smart Search"] = "Search & Info",
+		["Client Intelligence"] = "Search & Info",
+		["Inspector Hub"] = "Search & Info",
+
+		["3D Viewer"] = "Advanced",
+		["Image Viewer"] = "Advanced",
+		["Task Router"] = "Advanced",
+		["Control Center"] = "Advanced",
+		["Security Auditor"] = "Advanced",
+		["Property Tracker"] = "Advanced",
+		["Thread Manager"] = "Advanced",
+		["Serialize Inst"] = "Advanced",
+	}
+
+	local currentCategory = "All"
+
 	local table_clear = table.clear or function(t)
 		for k in pairs(t) do
 			t[k] = nil
@@ -2609,7 +2642,14 @@ Main = (function()
 		local total = 0
 		for _, card in ipairs(Main.AppCards) do
 			total = total + 1
-			local isVisible = query == "" or string.find(card.SearchText, query, 1, true) ~= nil
+			local category = appCategories[card.Name] or "Advanced"
+			local categoryMatch = (currentCategory == "All") or 
+								  (currentCategory == "Core" and category == "Core") or
+								  (currentCategory == "Spy" and category == "Spy & Hook") or
+								  (currentCategory == "Search" and category == "Search & Info") or
+								  (currentCategory == "Advanced" and category == "Advanced")
+
+			local isVisible = categoryMatch and (query == "" or string.find(card.SearchText, query, 1, true) ~= nil)
 			if Main.HiddenAppsContainer and Main.AppsContainer then
 				card.Gui.Parent = isVisible and Main.AppsContainer or Main.HiddenAppsContainer
 				card.Gui.Visible = true
@@ -2619,7 +2659,7 @@ Main = (function()
 			if isVisible then visible = visible + 1 end
 		end
 		if Main.MenuCountLabel then
-			Main.MenuCountLabel.Text = query == "" and (total .. " tools") or (visible .. " / " .. total .. " tools")
+			Main.MenuCountLabel.Text = query == "" and (visible .. " tools") or (visible .. " / " .. total .. " tools")
 		end
 		Main.UpdateMenuCanvas()
 	end
@@ -2905,6 +2945,87 @@ Main = (function()
 		Main.MenuSearchBox = gui.OpenButton.MainFrame.Header.SearchBox
 		Main.MenuCountLabel = gui.OpenButton.MainFrame.BottomFrame.AppCount
 		Main.MainGuiOpen = false
+
+		-- Dynamically modify dimensions to make space for category tabs
+		local mainFrame = gui.OpenButton.MainFrame
+		local header = mainFrame.Header
+		header.Size = UDim2.new(1, 0, 0, 128)
+		mainFrame.AppsFrame.Position = UDim2.new(0.5, 0, 0, 134)
+		mainFrame.AppsFrame.Size = UDim2.new(1, -10, 1, -170)
+
+		-- Create tabs container
+		local tabContainer = Instance.new("Frame")
+		tabContainer.Name = "CategoryTabs"
+		tabContainer.BackgroundTransparency = 1
+		tabContainer.Position = UDim2.new(0, 12, 0, 92)
+		tabContainer.Size = UDim2.new(1, -24, 0, 26)
+		tabContainer.Parent = header
+
+		local tabLayout = Instance.new("UIListLayout")
+		tabLayout.FillDirection = Enum.FillDirection.Horizontal
+		tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		tabLayout.Padding = UDim.new(0, 4)
+		tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		tabLayout.Parent = tabContainer
+
+		local categories = {"All", "Core", "Spy", "Search", "Advanced"}
+		local tabButtons = {}
+
+		local function updateTabVisuals()
+			for cat, btn in pairs(tabButtons) do
+				local active = (cat == currentCategory)
+				btn.BackgroundColor3 = active and Settings.Theme.Highlight or Settings.Theme.Button
+				btn.TextColor3 = active and Settings.Theme.Text or Settings.Theme.PlaceholderText
+				local stroke = btn:FindFirstChild("UIStroke")
+				if stroke then
+					stroke.Color = active and Settings.Theme.Highlight or Settings.Theme.Outline1
+				end
+			end
+		end
+
+		for i, cat in ipairs(categories) do
+			local btn = Instance.new("TextButton")
+			btn.Name = cat .. "Tab"
+			btn.AutoButtonColor = false
+			btn.BackgroundColor3 = Settings.Theme.Button
+			btn.BorderSizePixel = 0
+			btn.Font = Enum.Font.SourceSansBold
+			btn.Size = UDim2.new(0, cat == "Advanced" and 64 or (cat == "Search" and 56 or 48), 1, 0)
+			btn.Text = cat == "Spy" and "Spy & Hook" or (cat == "Search" and "Search" or cat)
+			btn.TextColor3 = Settings.Theme.PlaceholderText
+			btn.TextSize = 11
+			btn.LayoutOrder = i
+			btn.Parent = tabContainer
+
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 6)
+			corner.Parent = btn
+
+			local stroke = Instance.new("UIStroke")
+			stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+			stroke.Color = Settings.Theme.Outline1
+			stroke.Thickness = 1
+			stroke.Transparency = 0.35
+			stroke.Parent = btn
+
+			tabButtons[cat] = btn
+
+			btn.MouseButton1Click:Connect(function()
+				currentCategory = cat
+				updateTabVisuals()
+				Main.ApplyMenuFilter()
+			end)
+
+			Lib.ButtonAnim(btn, {
+				Mode = 2,
+				StartColor = Settings.Theme.Button,
+				HoverColor = Settings.Theme.ButtonHover,
+				PressColor = Settings.Theme.ButtonPress,
+				OutlineColor = Settings.Theme.Outline2
+			})
+		end
+
+		updateTabVisuals()
 
 		local openButton = gui.OpenButton
 		openButton.BackgroundTransparency = 0.2

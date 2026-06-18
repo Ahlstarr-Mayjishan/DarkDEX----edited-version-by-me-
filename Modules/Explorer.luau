@@ -43,7 +43,7 @@ local function main()
 	local expanded
 	local entryTemplate,treeFrame,toolBar,descendantAddedCon,descendantRemovingCon,itemChangedCon
 	local ffa = game.FindFirstAncestorWhichIsA
-	local getDescendants = game.GetDescendants
+	local getDescendants = function(obj) return obj:GetDescendants() end
 	local getTextSize = service.TextService.GetTextSize
 	local updateDebounce,refreshDebounce = false,false
 	local nilNode = {Obj = Instance.new("Folder")}
