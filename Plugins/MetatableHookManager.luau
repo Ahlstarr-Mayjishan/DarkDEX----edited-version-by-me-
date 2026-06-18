@@ -83,7 +83,7 @@ local function main()
 		},
 		__newindex = {
 			name = "__newindex",
-			enabled = true,
+			enabled = false,
 			installed = false,
 			count = 0,
 			last = "never",
@@ -108,6 +108,7 @@ local function main()
 	local max_logs_per_second = 140
 	local log_limit = 320
 	local visible_log_limit = 90
+	local high_volume_hook_active = false
 
 	local window, list_frame, scroll_v, status_label, empty_label, inspector_scroll, hook_panel, capability_label
 	local rebuild_list, render_hooks, show_details
@@ -281,12 +282,28 @@ local function main()
 			end
 		end
 		status_label.Text = string.format(
-			"%s | %d hooks installed | %d events%s",
+			"%s | %d hooks installed | %d events%s%s",
 			active and (paused and "Paused" or "Capturing") or "Idle",
 			installed_count,
 			#logs,
-			dropped_logs > 0 and (" | dropped " .. dropped_logs) or ""
+			dropped_logs > 0 and (" | dropped " .. dropped_logs) or "",
+			high_volume_hook_active and " | __index safe solo" or ""
 		)
+	end
+
+	local function enforce_safe_hook_set(changed_hook)
+		if changed_hook == "__index" and hooks.__index.enabled then
+			hooks.__namecall.enabled = false
+			hooks.__newindex.enabled = false
+			max_logs_per_second = 40
+			high_volume_hook_active = true
+			return
+		end
+		if changed_hook ~= "__index" and hooks[changed_hook] and hooks[changed_hook].enabled then
+			hooks.__index.enabled = false
+		end
+		high_volume_hook_active = hooks.__index.enabled == true
+		max_logs_per_second = high_volume_hook_active and 40 or 140
 	end
 
 	local function schedule_refresh()
@@ -403,18 +420,13 @@ local function main()
 					return original(self, key)
 				end
 				running_hooks[thread] = true
-				local ok_call, value = pcall(original, self, key)
 				local ok_log = pcall(function()
-					add_event("__index", self, tostring(key), ok_call and summarize_value(value) or ("error: " .. tostring(value)), 1)
+					add_event("__index", self, tostring(key), "read", 1)
 				end)
 				running_hooks[thread] = nil
 				if not ok_log then
 					dropped_logs += 1
 				end
-				if not ok_call then
-					error(value, 0)
-				end
-				return value
 			end
 			return original(self, key)
 		end))
@@ -468,9 +480,18 @@ local function main()
 	end
 
 	local function install_hooks()
-		install_namecall_hook()
-		install_index_hook()
-		install_newindex_hook()
+		if hooks.__index.enabled then
+			enforce_safe_hook_set("__index")
+		end
+		if hooks.__namecall.enabled then
+			install_namecall_hook()
+		end
+		if hooks.__index.enabled then
+			install_index_hook()
+		end
+		if hooks.__newindex.enabled then
+			install_newindex_hook()
+		end
 	end
 
 	local function clear_log_rows()
@@ -799,6 +820,7 @@ local function main()
 
 			row.MouseButton1Click:Connect(function()
 				hook.enabled = not hook.enabled
+				enforce_safe_hook_set(hook.name)
 				if active and hook.enabled then
 					install_hooks()
 				end
@@ -969,7 +991,7 @@ local function main()
 		left_note.TextWrapped = true
 		left_note.TextXAlignment = Enum.TextXAlignment.Left
 		left_note.TextYAlignment = Enum.TextYAlignment.Top
-		left_note.Text = "Click a hook card to toggle capture. Stop disables capture, but installed metamethod chains stay passive."
+		left_note.Text = "__index is high-volume and runs in solo safe mode. Enabling it disables __namecall and __newindex to avoid client crashes. Stop disables capture, but installed metamethod chains stay passive."
 
 		local split_left = Instance.new("Frame", body)
 		split_left.BackgroundColor3 = settings_ref.Theme.Outline1

@@ -526,9 +526,10 @@ local function main()
 
 		local dragTree = treeFrame:Clone()
 		dragTree:ClearAllChildren()
+		local baseIndex = math.floor(tonumber(Explorer.Index) or 0)
 
 		for i,v in pairs(listEntries) do
-			local node = tree[i + Explorer.Index]
+			local node = tree[i + baseIndex]
 			if node and selection.Map[node] then
 				local clone = v:Clone()
 				clone.Active = false
@@ -589,7 +590,7 @@ local function main()
 
 				for i = 1,#listEntries do
 					if Lib.CheckMouseInGui(listEntries[i]) then
-						local node = tree[i + Explorer.Index]
+						local node = Explorer.GetVisibleNode(i)
 						if node then
 							if selection.Map[node] then return end
 							local newPar = node.Obj
@@ -607,6 +608,10 @@ local function main()
 		end)
 	end
 
+	Explorer.GetVisibleNode = function(index)
+		return tree[index + math.floor(tonumber(Explorer.Index) or 0)]
+	end
+
 	Explorer.NewListEntry = function(index)
 		local newEntry = entryTemplate:Clone()
 		newEntry.Position = UDim2.new(0,0,0,20*(index-1))
@@ -614,7 +619,7 @@ local function main()
 		local isRenaming = false
 
 		newEntry.InputBegan:Connect(function(input)
-			local node = tree[index + Explorer.Index]
+			local node = Explorer.GetVisibleNode(index)
 			if not node or selection.Map[node] or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then return end
 
 			newEntry.Indent.BackgroundColor3 = Settings.Theme.Button
@@ -623,7 +628,7 @@ local function main()
 		end)
 
 		newEntry.InputEnded:Connect(function(input)
-			local node = tree[index + Explorer.Index]
+			local node = Explorer.GetVisibleNode(index)
 			if not node or selection.Map[node] or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then return end
 
 			newEntry.Indent.BackgroundTransparency = 1
@@ -694,7 +699,7 @@ local function main()
 		end)
 
 		newEntry.Indent.Expand.InputBegan:Connect(function(input)
-			local node = tree[index + Explorer.Index]
+			local node = Explorer.GetVisibleNode(index)
 			if not node or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then return end
 
 			if input.UserInputType == Enum.UserInputType.Touch then
@@ -705,7 +710,7 @@ local function main()
 		end)
 
 		newEntry.Indent.Expand.InputEnded:Connect(function(input)
-			local node = tree[index + Explorer.Index]
+			local node = Explorer.GetVisibleNode(index)
 			if not node or (input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch) then return end
 
 			if input.UserInputType == Enum.UserInputType.Touch then
@@ -716,7 +721,7 @@ local function main()
 		end)
 
 		newEntry.Indent.Expand.MouseButton1Down:Connect(function()
-			local node = tree[index + Explorer.Index]
+			local node = Explorer.GetVisibleNode(index)
 			if not node or #node == 0 then return end
 
 			expanded[node] = not expanded[node]
@@ -804,7 +809,10 @@ local function main()
 	end
 
 	Explorer.Refresh = function()
-		local maxNodes = math.max(math.ceil((treeFrame.AbsoluteSize.Y) / 20), 0)
+		local scrollIndex = tonumber(Explorer.Index) or 0
+		local baseIndex = math.floor(scrollIndex)
+		local pixelOffset = math.floor((scrollIndex - baseIndex) * 20 + 0.5)
+		local maxNodes = math.max(math.ceil((treeFrame.AbsoluteSize.Y) / 20) + 1, 0)
 		local renameNodeVisible = false
 		local isa = game.IsA
 
@@ -812,13 +820,13 @@ local function main()
 			local entry = listEntries[i]
 			if not listEntries[i] then entry = Explorer.NewListEntry(i) listEntries[i] = entry Explorer.ClickSystem:Add(entry) end
 
-			local node = tree[i + Explorer.Index]
+			local node = tree[i + baseIndex]
 			if node then
 				local obj = node.Obj
 				local depth = Explorer.EntryIndent*Explorer.NodeDepth(node)
 
 				entry.Visible = true
-				entry.Position = UDim2.new(0,-scrollH.Index,0,entry.Position.Y.Offset)
+				entry.Position = UDim2.new(0,-scrollH.Index,0,(i - 1) * 20 - pixelOffset)
 				entry.Size = UDim2.new(0,Explorer.ViewWidth,0,20)
 				entry.Indent.EntryName.Text = Explorer.GetCleanNodeName(node.Obj)
 				entry.Indent.Position = UDim2.new(0,depth,0,0)
@@ -2568,7 +2576,7 @@ return search]==]
 		sys.OnDown:Connect(function(item,combo,button)
 			local ind = table.find(listEntries,item)
 			if not ind then return end
-			local node = tree[ind + Explorer.Index]
+			local node = Explorer.GetVisibleNode(ind)
 			if not node then return end
 
 			local entry = listEntries[ind]
@@ -2658,7 +2666,7 @@ return search]==]
 		sys.OnRelease:Connect(function(item,combo,button,position)
 			local ind = table.find(listEntries,item)
 			if not ind then return end
-			local node = tree[ind + Explorer.Index]
+			local node = Explorer.GetVisibleNode(ind)
 			if not node then return end
 
 			if button == 1 then
