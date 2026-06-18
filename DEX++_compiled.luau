@@ -24095,7 +24095,7 @@ return {
 }
 ]],
 	["LoadedModuleSpy.lua"] = [[
-local _main_ref, lib_ref, apps_ref, settings_ref, theme_ref
+local _main_ref, lib_ref, apps_ref, settings_ref, env_ref, theme_ref
 
 local plugin_data = {
 	name         = "LoadedModuleSpy",
@@ -24107,6 +24107,7 @@ local function initDeps(data)
 	lib_ref      = data.Lib
 	apps_ref     = data.Apps
 	settings_ref = data.Settings
+	env_ref      = data.env
 end
 
 local function initAfterMain(t)
@@ -24150,8 +24151,8 @@ local function main()
 		table.clear(modules)
 		
 		-- Try getloadedmodules
-		if env.getloadedmodules then
-			local ok, loaded = pcall(env.getloadedmodules)
+		if env_ref and env_ref.getloadedmodules then
+			local ok, loaded = pcall(env_ref.getloadedmodules)
 			if ok and typeof(loaded) == "table" then
 				for _, m in pairs(loaded) do
 					if typeof(m) == "Instance" and m:IsA("ModuleScript") then
@@ -24173,8 +24174,8 @@ local function main()
 			end
 			
 			-- Nil instances too
-			if env.getnilinstances then
-				local ok2, nils = pcall(env.getnilinstances)
+			if env_ref and env_ref.getnilinstances then
+				local ok2, nils = pcall(env_ref.getnilinstances)
 				if ok2 and typeof(nils) == "table" then
 					for _, m in pairs(nils) do
 						if typeof(m) == "Instance" and m:IsA("ModuleScript") then
