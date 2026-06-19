@@ -2656,6 +2656,32 @@ local function main()
 			self.GuiElems.Minimize = guiTopBar.Minimize
 			self.GuiElems.ResizeControls = guiResizeControls
 			self.ContentPane = guiMain.Content
+
+			guiMain.BackgroundColor3 = Settings.Theme.Main2
+			guiMain.BackgroundTransparency = 0
+			guiMain.BorderSizePixel = 0
+			guiTopBar.BackgroundColor3 = Settings.Theme.Menu
+			guiTopBar.BorderSizePixel = 0
+			guiTopBar.Title.Font = Enum.Font.GothamBold
+			guiTopBar.Title.TextColor3 = Settings.Theme.Text
+			guiTopBar.Close.BackgroundColor3 = Settings.Theme.Button
+			guiTopBar.Minimize.BackgroundColor3 = Settings.Theme.Button
+			guiMain.Content.BackgroundColor3 = Settings.Theme.Main2
+			guiMain.Content.BorderSizePixel = 0
+			guiMain.Content.Line.BackgroundColor3 = Settings.Theme.Outline1
+			guiMain.Outlines.ImageTransparency = 0.25
+			guiMain.Outlines.ImageColor3 = Settings.Theme.Outline1
+
+			local mainStroke = guiMain:FindFirstChild("ModernStroke")
+			if not mainStroke then
+				mainStroke = Instance.new("UIStroke")
+				mainStroke.Name = "ModernStroke"
+				mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+				mainStroke.Thickness = 1
+				mainStroke.Parent = guiMain
+			end
+			mainStroke.Color = Settings.Theme.Outline1
+			mainStroke.Transparency = 0.18
 			
 			-- dont mind this, im testing what if the frame background is blurry 
 			--blur.new(guiMain.Content, "Rectangle")

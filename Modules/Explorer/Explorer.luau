@@ -1797,7 +1797,7 @@ local function main()
 			local isa = game.IsA
 
 			if #sList == 1 then
-				if isa(sList[1].Obj,"BasePart") or isa(sList[1].Obj,"Model") then
+				if (isa(sList[1].Obj,"BasePart") or isa(sList[1].Obj,"Model")) and ensureTool(ModelViewer) then
 					ModelViewer.ViewModel(sList[1].Obj)
 					return
 				end

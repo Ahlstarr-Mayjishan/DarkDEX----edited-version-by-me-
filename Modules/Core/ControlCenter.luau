@@ -225,7 +225,7 @@ local function main()
 		local fpsColor = currentFps >= 50 and Color3.fromRGB(34, 197, 94) or (currentFps >= 30 and Color3.fromRGB(234, 179, 8) or Settings.Theme.Important)
 		card(overviewFrame, 8, 8, 170, 76, "FPS", tostring(math.floor(currentFps + 0.5)), "live heartbeat estimate", fpsColor)
 		card(overviewFrame, 186, 8, 170, 76, "Helper", helper.Status, tostring(helper.Indexed) .. " indexed", helper.Status == "active" and Color3.fromRGB(34, 197, 94) or Settings.Theme.Important)
-		card(overviewFrame, 364, 8, 170, 76, "Code Search", lowImpact and "Low Impact" or "Full Index", lowImpact and "cache/helper only" or "may decompile", lowImpact and Color3.fromRGB(34, 197, 94) or Color3.fromRGB(234, 179, 8))
+		card(overviewFrame, 364, 8, 170, 76, "Search Center", lowImpact and "Low Impact" or "Full Index", lowImpact and "cache/helper only" or "may decompile", lowImpact and Color3.fromRGB(34, 197, 94) or Color3.fromRGB(234, 179, 8))
 		card(overviewFrame, 542, 8, 170, 76, "Helper Logging", helperLog and "ON" or "OFF", tostring(Settings.Decompiler.HelperLogRateLimit or 5) .. " logs/s cap", helperLog and Color3.fromRGB(234, 179, 8) or Color3.fromRGB(34, 197, 94))
 		button(overviewFrame, "Panic Stop", 8, 102, 110, 26, panicStop)
 		button(overviewFrame, "Force Low Impact", 126, 102, 130, 26, function()
@@ -298,12 +298,12 @@ local function main()
 		local spyDetail = tostring(spy.Remotes or 0) .. " remotes | " ..
 			tostring(spy.Logs or 0) .. " logs | " ..
 			tostring(spy.Dropped or 0) .. " dropped"
-		addModuleRow(modulesFrame, 8, "Code Search", code.State or (Settings.Decompiler.CodeSearchLowImpact ~= false and "guarded" or "full"), code.Load or (Settings.Decompiler.CodeSearchLowImpact ~= false and "low" or "high"), codeDetail, "Code Search")
+		addModuleRow(modulesFrame, 8, "Search Center", code.State or (Settings.Decompiler.CodeSearchLowImpact ~= false and "guarded" or "full"), code.Load or (Settings.Decompiler.CodeSearchLowImpact ~= false and "low" or "high"), codeDetail, "Search Center")
 		addModuleRow(modulesFrame, 48, "Property Tracker", tracker.State or (Settings.Decompiler.HelperLogChanges == true and "logging" or "local"), tracker.Load or (Settings.Decompiler.HelperLogChanges == true and "medium" or "low"), trackerDetail, "Property Tracker")
 		addModuleRow(modulesFrame, 88, "Helper Server", helper.Status, helper.Status == "active" and "low" or "off", tostring(helper.Indexed) .. " indexed | " .. helper.File, "Task Router")
 		addModuleRow(modulesFrame, 128, "Thread Manager", threads.State or (Apps.ThreadManager and "available" or "missing"), threads.Load or "low", threadDetail, "Thread Manager")
 		addModuleRow(modulesFrame, 168, "Remote Spy", spy.State or (Apps.RemoteSpy and "available" or "plugin"), spy.Load or "variable", spyDetail, "Remote Spy")
-		addModuleRow(modulesFrame, 208, "Runtime Inspector", Apps.RuntimeInspector and "available" or "missing", "variable", "Prefer snapshots over continuous deep scans.", "Runtime Inspector")
+		addModuleRow(modulesFrame, 208, "Runtime Monitor", Apps.RuntimeInspector and "available" or "missing", "variable", "Prefer snapshots over continuous deep scans.", "Runtime Monitor")
 	end
 
 	local function renderRules()

@@ -19,17 +19,41 @@ def build():
     with open(shell_path, "r", encoding="utf-8") as f:
         template = f.read()
 
-    # Load module files and format them for insertion
-    module_list = [
-        "Theme", "SmartDecompiler", "Console", "Explorer", "Lib", "ModelViewer", 
-        "Properties", "SaveInstance", "ScriptViewer", "SettingsWindow", "CodeSearch", "ScriptRelations", "RemoteUsageMap", "ObjectLinks", "ImageViewer", "ClientIndex", "ActivityMap", "DependencyGraph", "SmartSearch", "RuntimeInspector", "SecurityAuditor", "ClientIntelligence", "InspectorHub", "TaskRouter", "ControlCenter", "RemoteFuzzer", "PropertyTracker", "InstanceSerializer", "ThreadManager"
-    ]
+    # Load module files and format them for insertion.
+    # Runtime module names stay flat for Apps.<Name>, while source files are
+    # grouped by ownership so the repo is easier to navigate.
+    module_groups = {
+        "Core": [
+            "Theme", "Lib", "Console", "SettingsWindow", "ControlCenter",
+            "TaskRouter", "ThreadManager",
+        ],
+        "Explorer": [
+            "Explorer", "Properties", "SaveInstance", "ModelViewer",
+            "ImageViewer", "ObjectLinks", "InstanceSerializer",
+        ],
+        "Search": [
+            "SmartDecompiler", "ScriptViewer", "ClientIndex", "CodeSearch",
+            "SmartSearch", "DependencyGraph", "ScriptRelations",
+            "SecurityAuditor",
+        ],
+        "Runtime": [
+            "RuntimeInspector", "RemoteUsageMap", "ActivityMap",
+            "PropertyTracker", "RemoteFuzzer", "ClientIntelligence",
+            "InspectorHub",
+        ],
+    }
+    module_list = [name for names in module_groups.values() for name in names]
+    module_paths = {
+        name: os.path.join("Modules", group, f"{name}.luau")
+        for group, names in module_groups.items()
+        for name in names
+    }
     
     embedded_str = ""
     for name in module_list:
-        filepath = os.path.join("Modules", f"{name}.luau")
+        filepath = module_paths.get(name, os.path.join("Modules", f"{name}.luau"))
         if not os.path.exists(filepath):
-            filepath = os.path.join("Modules", f"{name}.lua")
+            filepath = filepath[:-5] + ".lua" if filepath.endswith(".luau") else os.path.join("Modules", f"{name}.lua")
             
         with open(filepath, "r", encoding="utf-8") as mf:
             m_code = mf.read().strip()

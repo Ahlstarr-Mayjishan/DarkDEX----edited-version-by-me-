@@ -35,7 +35,7 @@ end
 
 local function main()
 	local CodeSearch = {}
-	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, resultContextMenu
+	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, filterButton, resultContextMenu
 	local indexing = false
 	local searching = false
 	local cancelRequested = false
@@ -49,6 +49,8 @@ local function main()
 	local reviewedKeys = {}
 	local indexedKeys = {}
 	local helperIndexedKeys = {}
+	local searchFilter = "All"
+	local filterOrder = {"All", "Code", "Path", "Name", "Class", "Failed"}
 
 	local function setStatus(text)
 		if statusLabel then
@@ -90,6 +92,34 @@ local function main()
 			lowImpactButton.Text = "Full"
 			lowImpactButton.BackgroundColor3 = Color3.fromRGB(234, 179, 8)
 		end
+	end
+
+	local function updateFilterButton()
+		if filterButton then
+			filterButton.Text = "Filter: " .. searchFilter
+		end
+	end
+
+	local function sourceHasText(source)
+		return type(source) == "string" and source:match("%S") ~= nil
+	end
+
+	local function isFailureSource(source)
+		if not sourceHasText(source) then return true end
+		local lowered = tostring(source):lower()
+		return lowered:find("failed to decompile", 1, true) ~= nil
+			or lowered:find("empty bytecode", 1, true) ~= nil
+			or lowered:find("getscriptbytecode is not supported", 1, true) ~= nil
+			or lowered:find("failed to get script bytecode", 1, true) ~= nil
+			or lowered:find("error occurred while requesting", 1, true) ~= nil
+			or lowered:find("deserialization failed", 1, true) ~= nil
+	end
+
+	local function cycleSearchFilter()
+		local index = table.find(filterOrder, searchFilter) or 1
+		searchFilter = filterOrder[(index % #filterOrder) + 1]
+		updateFilterButton()
+		setStatus("Filter set to " .. searchFilter .. ".")
 	end
 
 	local function decodeJson(body)
@@ -176,6 +206,24 @@ local function main()
 		return success and cachedFile == true
 	end
 
+	local function readCachedSource(scriptInstance)
+		if not env.DecompileCache or not env.DecompileCache.Read then return nil end
+		local ok, source = pcall(env.DecompileCache.Read, scriptInstance)
+		return ok and type(source) == "string" and source or nil
+	end
+
+	local function isValidDecompileSource(source)
+		return sourceHasText(source) and not isFailureSource(source)
+	end
+
+	local function validateCachedSource(scriptInstance)
+		local source = readCachedSource(scriptInstance)
+		if isValidDecompileSource(source) then
+			return true, source
+		end
+		return false, source
+	end
+
 	local function clearResults()
 		if not resultsFrame then return end
 		for _, child in pairs(resultsFrame:GetChildren()) do
@@ -210,6 +258,10 @@ local function main()
 		if not tool then return false end
 		if tool.EnsureInit then
 			return tool.EnsureInit()
+		end
+		if tool.Init and not tool.Window then
+			local ok = pcall(tool.Init)
+			return ok == true
 		end
 		return true
 	end
@@ -276,6 +328,33 @@ local function main()
 			end
 		end
 		return nil
+	end
+
+	local function entryMatchesFilter(entry, source, query)
+		local loweredQuery = tostring(query or ""):lower()
+		local path = tostring(entry.Path or ""):lower()
+		local name = tostring(entry.Name or ""):lower()
+		local className = tostring(entry.ClassName or ""):lower()
+		local loweredSource = tostring(source or ""):lower()
+		local failed = isFailureSource(source)
+
+		if searchFilter == "Failed" then
+			return failed and (loweredQuery == "" or path:find(loweredQuery, 1, true) or name:find(loweredQuery, 1, true) or className:find(loweredQuery, 1, true) or loweredSource:find(loweredQuery, 1, true))
+		end
+		if loweredQuery == "" then return false end
+		if searchFilter == "Code" then
+			return sourceHasText(source) and not failed and loweredSource:find(loweredQuery, 1, true) ~= nil
+		elseif searchFilter == "Path" then
+			return path:find(loweredQuery, 1, true) ~= nil
+		elseif searchFilter == "Name" then
+			return name:find(loweredQuery, 1, true) ~= nil
+		elseif searchFilter == "Class" then
+			return className:find(loweredQuery, 1, true) ~= nil
+		end
+		return loweredSource:find(loweredQuery, 1, true) ~= nil
+			or path:find(loweredQuery, 1, true) ~= nil
+			or name:find(loweredQuery, 1, true) ~= nil
+			or className:find(loweredQuery, 1, true) ~= nil
 	end
 
 	local function copyText(text, okMessage)
@@ -439,6 +518,7 @@ local function main()
 		sideTitle.Text = tostring(entry.Name or path:match("[^%.%[%]]+$") or "Script")
 		sidePath.Text = path
 		sideMeta.Text = tostring(entry.ClassName or "LuaSourceContainer") .. " | key " .. tostring(record.Key)
+			.. (record.Status == "failed" and " | failed" or "")
 			.. (pinnedKeys[record.Key] and " | pinned" or "")
 			.. (reviewedKeys[record.Key] and " | reviewed" or "")
 		sideBadges.Text = badgeText
@@ -509,6 +589,16 @@ local function main()
 		end
 	end
 
+	local function openSmartSearch()
+		local smart = Apps.SmartSearch
+		if smart and ensureTool(smart) then
+			if smart.Window then smart.Window:Show() end
+			setStatus("Smart Search opened inside Search Center.")
+		else
+			setStatus("Smart Search is unavailable.")
+		end
+	end
+
 	local function inspectModuleReturn(record)
 		local scriptInstance = resolveScript(record)
 		if not scriptInstance or not scriptInstance:IsA("ModuleScript") then
@@ -550,6 +640,9 @@ local function main()
 	end
 
 	local function addResult(entryKey, entry, query, source, snippetOverride, metadata)
+		source = tostring(source or "")
+		metadata = metadata or {}
+		local failedSource = metadata.Status == "failed" or isFailureSource(source)
 		local row = Instance.new("TextButton")
 		row.AutoButtonColor = false
 		row.BackgroundColor3 = Settings.Theme.Main1
@@ -573,7 +666,7 @@ local function main()
 		name.Position = UDim2.new(0,10,0,3)
 		name.Size = UDim2.new(1,-18,0,18)
 		name.Text = tostring(entry.Path or entry.Name or entryKey)
-		name.TextColor3 = Settings.Theme.Text
+		name.TextColor3 = failedSource and (Settings.Theme.Important or Color3.fromRGB(244, 63, 94)) or Settings.Theme.Text
 		name.TextSize = 14
 		name.TextTruncate = Enum.TextTruncate.AtEnd
 		name.TextXAlignment = Enum.TextXAlignment.Left
@@ -581,10 +674,14 @@ local function main()
 
 		local snippet = snippetOverride
 		if not snippet then
-			local lowerSource = source:lower()
-			local startIndex = lowerSource:find(query, 1, true) or 1
-			local snippetStart = math.max(1, startIndex - 45)
-			snippet = source:sub(snippetStart, math.min(#source, startIndex + 95)):gsub("\r", " "):gsub("\n", " ")
+			if failedSource then
+				snippet = sourceHasText(source) and source:sub(1, 140):gsub("\r", " "):gsub("\n", " ") or "Decompile failed: empty source."
+			else
+				local lowerSource = source:lower()
+				local startIndex = lowerSource:find(query, 1, true) or 1
+				local snippetStart = math.max(1, startIndex - 45)
+				snippet = source:sub(snippetStart, math.min(#source, startIndex + 95)):gsub("\r", " "):gsub("\n", " ")
+			end
 		end
 
 		local metaText = formatHelperMeta(metadata)
@@ -598,7 +695,7 @@ local function main()
 		detail.Position = UDim2.new(0,10,0,22)
 		detail.Size = UDim2.new(1,-18,0,18)
 		detail.Text = snippet
-		detail.TextColor3 = Settings.Theme.PlaceholderText
+		detail.TextColor3 = failedSource and (Settings.Theme.Important or Color3.fromRGB(244, 63, 94)) or Settings.Theme.PlaceholderText
 		detail.TextSize = 13
 		detail.TextTruncate = Enum.TextTruncate.AtEnd
 		detail.TextXAlignment = Enum.TextXAlignment.Left
@@ -613,6 +710,7 @@ local function main()
 			Source = source,
 			Snippet = snippet,
 			Metadata = metadata,
+			Status = failedSource and "failed" or "ok",
 		}
 		resultRecords[entryKey] = record
 		resultRows[entryKey] = row
@@ -750,7 +848,7 @@ local function main()
 		if not env.DecompileCache or not env.DecompileCache.Read then return false end
 
 		local okSource, source = pcall(env.DecompileCache.Read, scriptInstance)
-		if not okSource or type(source) ~= "string" then return false end
+		if not okSource or not isValidDecompileSource(source) then return false end
 
 		local okPath, path = pcall(function()
             if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(scriptInstance) end
@@ -790,13 +888,13 @@ local function main()
 		local token = beginOperation()
 		local query = tostring(searchBox.Text or ""):lower()
 		clearResults()
-		if query == "" then
-			setStatus("Enter a keyword to search cached code.")
+		if query == "" and searchFilter ~= "Failed" then
+			setStatus("Enter a keyword to search cached code, or switch filter to Failed.")
 			searching = false
 			return
 		end
 
-		if searchWithHelper(query) then
+		if (searchFilter == "All" or searchFilter == "Code") and searchWithHelper(query) then
 			searching = false
 			return
 		end
@@ -820,8 +918,7 @@ local function main()
 					local success, source = pcall(env.readfile, path)
 					if success and type(source) == "string" then
 						scanned += 1
-						local lowerPath = tostring(entry.Path or ""):lower()
-						if source:lower():find(query, 1, true) or lowerPath:find(query, 1, true) then
+						if entryMatchesFilter(entry, source, query) then
 							found += 1
 							addResult(key, entry, query, source)
 						end
@@ -835,7 +932,7 @@ local function main()
 		end
 
 		searching = false
-		setStatus(("Found %d result(s) in %d cached script(s)."):format(found, scanned))
+		setStatus(("Filter %s: found %d result(s) in %d cached script(s)."):format(searchFilter, found, scanned))
 	end
 
 	CodeSearch.IndexScripts = function()
@@ -918,8 +1015,13 @@ local function main()
 
 				local key = getScriptKey(scriptInstance)
 				if key and indexedKeys[key] and hasCachedFile(scriptInstance) then
-					cached += 1
-					if pushToHelperIndex(scriptInstance, key) then helperIndexed += 1 end
+					local validCached = validateCachedSource(scriptInstance)
+					if validCached then
+						cached += 1
+						if pushToHelperIndex(scriptInstance, key) then helperIndexed += 1 end
+					else
+						failed += 1
+					end
 					batchCount += 1
 					if batchCount % 100 == 0 then
 						task.wait()
@@ -928,9 +1030,14 @@ local function main()
 				end
 
 				if hasCachedFile(scriptInstance) then
-					if key then indexedKeys[key] = true end
-					cached += 1
-					if pushToHelperIndex(scriptInstance, key) then helperIndexed += 1 end
+					local validCached = validateCachedSource(scriptInstance)
+					if validCached then
+						if key then indexedKeys[key] = true end
+						cached += 1
+						if pushToHelperIndex(scriptInstance, key) then helperIndexed += 1 end
+					else
+						failed += 1
+					end
 					batchCount += 1
 					if batchCount % 100 == 0 then
 						task.wait()
@@ -948,17 +1055,24 @@ local function main()
 				end
 
 				local success
+				local resultSource
 				if env.DecompileQueue and env.DecompileQueue.Submit then
-					success = pcall(env.DecompileQueue.Submit, scriptInstance, {Priority = 10})
+					success, resultSource = pcall(env.DecompileQueue.Submit, scriptInstance, {Priority = 10})
 				else
-					success = pcall(env.decompile, scriptInstance)
+					success, resultSource = pcall(env.decompile, scriptInstance)
 				end
-				if success then
+				local cachedValid, cachedSource = validateCachedSource(scriptInstance)
+				local hasValidSource = isValidDecompileSource(resultSource) or cachedValid
+				if success and hasValidSource then
 					decompiled += 1
 					if key then indexedKeys[key] = true end
 					if key and pushToHelperIndex(scriptInstance, key) then helperIndexed += 1 end
 				else
 					failed += 1
+					if success and not hasValidSource then
+						local reason = sourceHasText(resultSource) and tostring(resultSource):sub(1, 80) or (sourceHasText(cachedSource) and tostring(cachedSource):sub(1, 80) or "empty source")
+						setStatus(("Decompile failed for %s: %s"):format(scriptInstance.Name, reason))
+					end
 				end
 
 				task.wait(0.08)
@@ -1021,7 +1135,7 @@ local function main()
 
 	CodeSearch.Init = function()
 		window = Lib.Window.new()
-		window:SetTitle("Code Search")
+		window:SetTitle("Search Center")
 		window:Resize(780,460)
 		CodeSearch.Window = window
 
@@ -1042,23 +1156,25 @@ local function main()
 		searchBox.PlaceholderColor3 = Settings.Theme.PlaceholderText
 		searchBox.PlaceholderText = "Search cached code"
 		searchBox.Position = UDim2.new(0,6,0,6)
-		searchBox.Size = UDim2.new(1,-246,0,22)
+		searchBox.Size = UDim2.new(1,-316,0,22)
 		searchBox.Text = ""
 		searchBox.TextColor3 = Settings.Theme.Text
 		searchBox.TextSize = 14
 		searchBox.TextXAlignment = Enum.TextXAlignment.Left
 		searchBox.Parent = toolbar
 
-		local indexButton = makeButton(toolbar, "Index", UDim2.new(1,-234,0,6), UDim2.new(0,86,0,22))
-		local searchButton = makeButton(toolbar, "Search", UDim2.new(1,-144,0,6), UDim2.new(0,66,0,22))
+		local indexButton = makeButton(toolbar, "Index", UDim2.new(1,-304,0,6), UDim2.new(0,66,0,22))
+		local searchButton = makeButton(toolbar, "Search", UDim2.new(1,-234,0,6), UDim2.new(0,66,0,22))
+		local smartButton = makeButton(toolbar, "Smart", UDim2.new(1,-164,0,6), UDim2.new(0,66,0,22))
 		local stopButton = makeButton(toolbar, "Stop", UDim2.new(1,-74,0,6), UDim2.new(0,68,0,22))
+		filterButton = makeButton(toolbar, "Filter: All", UDim2.new(0,6,0,32), UDim2.new(0,108,0,20))
 		lowImpactButton = makeButton(toolbar, "Low ON", UDim2.new(1,-82,0,32), UDim2.new(0,76,0,20))
 
 		statusLabel = Instance.new("TextLabel")
 		statusLabel.BackgroundTransparency = 1
 		statusLabel.Font = Enum.Font.SourceSans
-		statusLabel.Position = UDim2.new(0,6,0,32)
-		statusLabel.Size = UDim2.new(1,-94,0,20)
+		statusLabel.Position = UDim2.new(0,120,0,32)
+		statusLabel.Size = UDim2.new(1,-208,0,20)
 		statusLabel.Text = "Low Impact is ON: Index uses cache/helper and skips new decompile."
 		reportTool({State = "idle", Load = "low", LowImpact = isLowImpactIndex()})
 		statusLabel.TextColor3 = Settings.Theme.PlaceholderText
@@ -1095,7 +1211,9 @@ local function main()
 
 		indexButton.MouseButton1Click:Connect(CodeSearch.IndexScripts)
 		searchButton.MouseButton1Click:Connect(CodeSearch.Search)
+		smartButton.MouseButton1Click:Connect(openSmartSearch)
 		stopButton.MouseButton1Click:Connect(CodeSearch.Stop)
+		filterButton.MouseButton1Click:Connect(cycleSearchFilter)
 		lowImpactButton.MouseButton1Click:Connect(function()
 			Settings.Decompiler.CodeSearchLowImpact = not isLowImpactIndex()
 			updateLowImpactButton()
@@ -1106,6 +1224,7 @@ local function main()
 			end
 		end)
 		updateLowImpactButton()
+		updateFilterButton()
 		searchBox.FocusLost:Connect(function(enterPressed)
 			if enterPressed then
 				CodeSearch.Search()

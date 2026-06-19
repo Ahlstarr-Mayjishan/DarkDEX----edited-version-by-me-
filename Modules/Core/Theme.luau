@@ -40,6 +40,8 @@ local function main()
 			return Enum.Font.Gotham
 		elseif font == Enum.Font.SourceSansBold then
 			return Enum.Font.GothamBold
+		elseif font == Enum.Font.Code then
+			return Enum.Font.RobotoMono
 		end
 		return font
 	end
@@ -72,7 +74,7 @@ local function main()
 
 	-- Standardized Button Styling with Smooth Tweens
 	function Theme.StyleButton(button, isAccent)
-		Theme.ApplyRounding(button, 4)
+		Theme.ApplyRounding(button, 6)
 		button.Font = Theme.MapFont(button.Font)
 		button.BorderSizePixel = 0
 
@@ -83,6 +85,7 @@ local function main()
 
 		button.BackgroundColor3 = startCol
 		button.TextColor3 = theme.Text
+		Theme.ApplyStroke(button, isAccent and theme.Highlight or theme.Outline2, 1, isAccent and 0.25 or 0.45)
 
 		button.MouseEnter:Connect(function()
 			service.TweenService:Create(button, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
@@ -108,8 +111,8 @@ local function main()
 
 	-- Standardized TextBox Styling
 	function Theme.StyleTextBox(textBox)
-		Theme.ApplyRounding(textBox, 4)
-		Theme.ApplyStroke(textBox, Settings.Theme.Outline3, 1, 0.3)
+		Theme.ApplyRounding(textBox, 6)
+		Theme.ApplyStroke(textBox, Settings.Theme.Outline3, 1, 0.25)
 		textBox.Font = Theme.MapFont(textBox.Font)
 		textBox.BackgroundColor3 = Settings.Theme.TextBox
 		textBox.TextColor3 = Settings.Theme.Text
@@ -119,12 +122,37 @@ local function main()
 
 	-- Standardized Frame Styling
 	function Theme.StyleFrame(frame, mainType)
-		Theme.ApplyRounding(frame, 4)
+		Theme.ApplyRounding(frame, 8)
 		local theme = Settings.Theme
 		local bgCol = (mainType == 1) and theme.Main1 or ((mainType == 2) and theme.Main2 or theme.Menu)
 		frame.BackgroundColor3 = bgCol
 		frame.BorderSizePixel = 0
 		Theme.ApplyStroke(frame, theme.Outline1, 1, 0.4)
+	end
+
+	function Theme.StyleWindow(window)
+		if not window or not window.GuiElems then return end
+		local theme = Settings.Theme
+		local main = window.GuiElems.Main
+		local topBar = window.GuiElems.TopBar
+		local content = window.GuiElems.Content
+		local line = window.GuiElems.Line
+		if main then
+			main.BackgroundTransparency = 0
+			Theme.ApplyRounding(main, 8)
+			Theme.ApplyStroke(main, theme.Outline1, 1, 0.2)
+		end
+		if topBar then
+			topBar.BackgroundColor3 = theme.Menu
+			topBar.BorderSizePixel = 0
+		end
+		if content then
+			content.BackgroundColor3 = theme.Main2
+			content.BorderSizePixel = 0
+		end
+		if line then
+			line.BackgroundColor3 = theme.Outline1
+		end
 	end
 
 	return Theme

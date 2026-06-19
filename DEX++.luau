@@ -86,21 +86,25 @@ DefaultSettings = (function()
 		},
 		Theme = {
 			_Recurse = true,
-			Main1 = rgb(25, 27, 31),
-			Main2 = rgb(15, 17, 20),
-			Outline1 = rgb(35, 39, 47), -- Mainly frames
-			Outline2 = rgb(55, 65, 81), -- Mainly button
-			Outline3 = rgb(35, 39, 47), -- Mainly textbox
-			TextBox = rgb(20, 22, 26),
-			Menu = rgb(18, 20, 24),
-			ListSelection = rgb(99, 102, 241),
-			Button = rgb(31, 41, 55),
-			ButtonHover = rgb(79, 70, 229),
-			ButtonPress = rgb(67, 56, 202),
-			Highlight = rgb(79, 70, 229),
-			Text = rgb(243, 244, 246),
-			PlaceholderText = rgb(156, 163, 175),
-			Important = rgb(244, 63, 94),
+			UIRevision = 2,
+			Main1 = rgb(24, 27, 32),
+			Main2 = rgb(11, 13, 17),
+			Outline1 = rgb(42, 48, 58), -- Mainly frames
+			Outline2 = rgb(62, 72, 86), -- Mainly button
+			Outline3 = rgb(33, 39, 49), -- Mainly textbox
+			TextBox = rgb(16, 19, 25),
+			Menu = rgb(14, 16, 21),
+			ListSelection = rgb(55, 139, 121),
+			Button = rgb(29, 34, 42),
+			ButtonHover = rgb(43, 91, 83),
+			ButtonPress = rgb(35, 74, 69),
+			Highlight = rgb(65, 168, 144),
+			Text = rgb(237, 241, 245),
+			PlaceholderText = rgb(141, 153, 166),
+			Important = rgb(232, 89, 102),
+			Success = rgb(70, 180, 126),
+			Warning = rgb(220, 170, 74),
+			AccentSoft = rgb(20, 48, 45),
 			ExplorerIconMap = "",
 			MiscIconMap = "",
 			Syntax = {
@@ -237,10 +241,12 @@ Main = (function()
 		["Save Instance"] = "Core",
 		["Settings"] = "Core",
 
+		["Runtime Monitor"] = "Spy & Hook",
 		["Remote Usage"] = "Spy & Hook",
 		["Runtime Inspector"] = "Spy & Hook",
 		["Activity Map"] = "Spy & Hook",
 
+		["Search Center"] = "Search & Info",
 		["Code Search"] = "Search & Info",
 		["Script Relations"] = "Search & Info",
 		["Object Links"] = "Search & Info",
@@ -499,7 +505,38 @@ Main = (function()
 		end
 	end
 
-	Main.ModuleList = {"Theme","SmartDecompiler","Explorer","Properties","ScriptViewer","Console","SaveInstance","ModelViewer","SettingsWindow","CodeSearch","ScriptRelations","RemoteUsageMap","ObjectLinks","ImageViewer","ClientIndex","ActivityMap","DependencyGraph","SmartSearch","RuntimeInspector","ClientIntelligence","InspectorHub","TaskRouter","ControlCenter","SecurityAuditor","RemoteFuzzer","PropertyTracker","InstanceSerializer","ThreadManager"}
+	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","ScriptViewer","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub"}
+	Main.ModulePathMap = {
+		Theme = "Core/Theme",
+		Lib = "Core/Lib",
+		Console = "Core/Console",
+		SettingsWindow = "Core/SettingsWindow",
+		ControlCenter = "Core/ControlCenter",
+		TaskRouter = "Core/TaskRouter",
+		ThreadManager = "Core/ThreadManager",
+		Explorer = "Explorer/Explorer",
+		Properties = "Explorer/Properties",
+		SaveInstance = "Explorer/SaveInstance",
+		ModelViewer = "Explorer/ModelViewer",
+		ImageViewer = "Explorer/ImageViewer",
+		ObjectLinks = "Explorer/ObjectLinks",
+		InstanceSerializer = "Explorer/InstanceSerializer",
+		SmartDecompiler = "Search/SmartDecompiler",
+		ScriptViewer = "Search/ScriptViewer",
+		ClientIndex = "Search/ClientIndex",
+		CodeSearch = "Search/CodeSearch",
+		SmartSearch = "Search/SmartSearch",
+		DependencyGraph = "Search/DependencyGraph",
+		ScriptRelations = "Search/ScriptRelations",
+		SecurityAuditor = "Search/SecurityAuditor",
+		RuntimeInspector = "Runtime/RuntimeInspector",
+		RemoteUsageMap = "Runtime/RemoteUsageMap",
+		ActivityMap = "Runtime/ActivityMap",
+		PropertyTracker = "Runtime/PropertyTracker",
+		RemoteFuzzer = "Runtime/RemoteFuzzer",
+		ClientIntelligence = "Runtime/ClientIntelligence",
+		InspectorHub = "Runtime/InspectorHub",
+	}
 	Main.Elevated = false
 	Main.AllowDraggableOnMobile = true
 	Main.MissingEnv = {}
@@ -748,8 +785,11 @@ Main = (function()
 			end
 
 			-- Developer Mode: Load directly from local file if exists
-			local localPath = 'dex/Modules/' .. name .. '.luau'
-			local localPathFallback = 'dex/Modules/' .. name .. '.lua'
+			local modulePath = Main.ModulePathMap and Main.ModulePathMap[name] or name
+			local localPath = 'dex/Modules/' .. modulePath .. '.luau'
+			local localPathFallback = 'dex/Modules/' .. modulePath .. '.lua'
+			local flatLocalPath = 'dex/Modules/' .. name .. '.luau'
+			local flatLocalPathFallback = 'dex/Modules/' .. name .. '.lua'
 			if isFsSupported and (isfile(localPath) or isfile(localPathFallback)) then
 				local path = isfile(localPath) and localPath or localPathFallback
 				local s, err = pcall(function()
@@ -764,6 +804,21 @@ Main = (function()
 				end
 				if not s then
 					warn('Failed to load local module ' .. name .. ': ' .. tostring(err))
+				end
+			elseif isFsSupported and (isfile(flatLocalPath) or isfile(flatLocalPathFallback)) then
+				local path = isfile(flatLocalPath) and flatLocalPath or flatLocalPathFallback
+				local s, err = pcall(function()
+					if gethsfuncs then _G.moduleData = nil end
+					control = loadstring(readfile(path))()
+					if not control and gethsfuncs then
+						control = _G.moduleData
+					end
+				end)
+				if s and control then
+					usedLocalOverride = true
+				end
+				if not s then
+					warn('Failed to load local flat module ' .. name .. ': ' .. tostring(err))
 				end
 			end
 
@@ -1474,7 +1529,7 @@ Main = (function()
 		end
 
 		local function isCacheableSource(source)
-			if type(source) ~= "string" or source == "" then return false end
+			if type(source) ~= "string" or source:match("%S") == nil then return false end
 			local lowered = source:lower()
 			if lowered:match("failed to decompile") or lowered:match("empty bytecode") then return false end
 			if lowered:match("getscriptbytecode is not supported") or lowered:match("failed to get script bytecode") then return false end
@@ -2004,6 +2059,31 @@ Main = (function()
 	--warn(Main.ExportSettings())
 
 	Main.LoadSettings = function()
+		local function applyModernThemeDefaults()
+			if type(Settings.Theme) ~= "table" then
+				Settings.Theme = {}
+			end
+
+			local defaults = DefaultSettings.Theme
+			if Settings.Theme.UIRevision ~= defaults.UIRevision then
+				local paletteKeys = {
+					"Main1", "Main2", "Outline1", "Outline2", "Outline3", "TextBox", "Menu",
+					"ListSelection", "Button", "ButtonHover", "ButtonPress", "Highlight", "Text",
+					"PlaceholderText", "Important", "Success", "Warning", "AccentSoft"
+				}
+				for _, key in ipairs(paletteKeys) do
+					Settings.Theme[key] = defaults[key]
+				end
+				Settings.Theme.UIRevision = defaults.UIRevision
+			end
+
+			for key, value in pairs(defaults) do
+				if Settings.Theme[key] == nil then
+					Settings.Theme[key] = value
+				end
+			end
+		end
+
 		local s, data = pcall(env.readfile or error, "DexPlusPlusSettings.json")
 		if s and data and data ~= "" then
 
@@ -2026,11 +2106,13 @@ Main = (function()
 				for k, v in pairs(deserializedData) do
 					Settings[k] = v
 				end
+				applyModernThemeDefaults()
 			else
 				warn("failed to decode settings json")
 			end
 		else
 			Main.ResetSettings()
+			applyModernThemeDefaults()
 		end
 	end
 
@@ -2731,14 +2813,14 @@ Main = (function()
 		local function updateState()
 			local hovering = Lib.CheckMouseInGui(app.Main)
 			app.Main.BackgroundTransparency = 0
-			app.Main.BackgroundColor3 = data.Open and Settings.Theme.Main1 or (hovering and Settings.Theme.ButtonHover or Settings.Theme.Button)
+			app.Main.BackgroundColor3 = data.Open and (Settings.Theme.AccentSoft or Settings.Theme.Main1) or (hovering and Settings.Theme.Main1 or Settings.Theme.Button)
 			app.Main.Highlight.Visible = data.Open
 			if app.Main:FindFirstChild("ActiveMarker") then
 				app.Main.ActiveMarker.Visible = data.Open
 			end
 			if stroke then
 				stroke.Color = data.Open and Settings.Theme.Highlight or Settings.Theme.Outline1
-				stroke.Transparency = data.Open and 0.15 or (hovering and 0.25 or 0.55)
+				stroke.Transparency = data.Open and 0.05 or (hovering and 0.18 or 0.48)
 			end
 		end
 
@@ -2764,14 +2846,45 @@ Main = (function()
 
 		updateState()
 
-		local ySize = service.TextService:GetTextSize(data.Name,13,Enum.Font.SourceSans,Vector2.new(88,999999)).Y
-		app.Main.Size = UDim2.new(1,0,0,math.clamp(50+ySize,70,82))
+		local ySize = service.TextService:GetTextSize(data.Name,13,Enum.Font.GothamBold,Vector2.new(132,999999)).Y
+		app.Main.Size = UDim2.new(1,0,0,math.clamp(56+ySize,74,86))
 		app.Main.AppName.Text = data.Name
+		app.Main.AppName.Font = Enum.Font.GothamBold
+		app.Main.AppName.TextXAlignment = Enum.TextXAlignment.Left
+
+		local categoryLabel = app.Main:FindFirstChild("CategoryLabel")
+		if not categoryLabel then
+			categoryLabel = Instance.new("TextLabel")
+			categoryLabel.Name = "CategoryLabel"
+			categoryLabel.BackgroundTransparency = 1
+			categoryLabel.Font = Enum.Font.Gotham
+			categoryLabel.Position = UDim2.new(0,56,0,36)
+			categoryLabel.Size = UDim2.new(1,-68,0,18)
+			categoryLabel.TextColor3 = Settings.Theme.PlaceholderText
+			categoryLabel.TextSize = 11
+			categoryLabel.TextTruncate = Enum.TextTruncate.AtEnd
+			categoryLabel.TextXAlignment = Enum.TextXAlignment.Left
+			categoryLabel.Parent = app.Main
+		end
+		categoryLabel.Text = appCategories[data.Name] or "Advanced"
+		categoryLabel.Visible = true
+
+		if app.Main.Icon then
+			app.Main.Icon.BackgroundColor3 = Settings.Theme.AccentSoft or Settings.Theme.Main1
+			app.Main.Icon.BackgroundTransparency = 0
+			app.Main.Icon.ImageColor3 = Settings.Theme.Highlight
+			local iconCorner = app.Main.Icon:FindFirstChildOfClass("UICorner")
+			if not iconCorner then
+				iconCorner = Instance.new("UICorner")
+				iconCorner.Parent = app.Main.Icon
+			end
+			iconCorner.CornerRadius = UDim.new(0,8)
+		end
 
 		app.Main.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-				app.Main.BackgroundColor3 = Settings.Theme.ButtonHover
-				if stroke then stroke.Transparency = 0.25 end
+				app.Main.BackgroundColor3 = data.Open and (Settings.Theme.AccentSoft or Settings.Theme.Main1) or Settings.Theme.Main1
+				if stroke then stroke.Transparency = data.Open and 0.05 or 0.18 end
 			end
 		end)
 
@@ -2797,7 +2910,7 @@ Main = (function()
 		table.insert(Main.AppCards, {
 			Gui = app,
 			Name = data.Name,
-			SearchText = string.lower(data.Name .. " " .. tostring(data.Icon or ""))
+			SearchText = string.lower(data.Name .. " " .. tostring(data.Icon or "") .. " " .. tostring(appCategories[data.Name] or "Advanced"))
 		})
 		Main.ApplyMenuFilter()
 
@@ -2851,6 +2964,24 @@ Main = (function()
 			moduleData.EnsureInit = ensureInit
 		end
 
+		if data.Hidden then
+			control = {
+				Enable = function(silent)
+					if not ensureInit() then return end
+					if not silent and moduleData and moduleData.Window then
+						moduleData.Window:Show()
+					end
+				end,
+				Disable = function(silent)
+					if not silent and initialized and moduleData and moduleData.Window then
+						moduleData.Window:Hide()
+					end
+				end,
+			}
+			Main.MenuApps[data.Name] = control
+			return control
+		end
+
 		control = Main.CreateApp({
 			Name = data.Name,
 			IconMap = data.IconMap,
@@ -2876,9 +3007,9 @@ Main = (function()
 	Main.SetMainGuiOpen = function(val)
 		Main.MainGuiOpen = val
 
-		Main.MainGui.OpenButton.Text = val and "Close" or "DEX++"
+		Main.MainGui.OpenButton.Text = "DEX++"
 		if val then Main.MainGui.OpenButton.MainFrame.Visible = true end
-		Main.MainGui.OpenButton.MainFrame:TweenSize(val and UDim2.new(0,360,0,430) or UDim2.new(0,0,0,0),Enum.EasingDirection.Out,Enum.EasingStyle.Quad,0.2,true)
+		Main.MainGui.OpenButton.MainFrame:TweenSize(val and UDim2.new(0,430,0,520) or UDim2.new(0,0,0,0),Enum.EasingDirection.Out,Enum.EasingStyle.Quart,0.22,true)
 		--Main.MainGui.OpenButton.BackgroundTransparency = val and 0 or (Lib.CheckMouseInGui(Main.MainGui.OpenButton) and 0 or 0.2)
 		service.TweenService:Create(Main.MainGui.OpenButton,TweenInfo.new(0.2,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{BackgroundTransparency = val and 0 or (Lib.CheckMouseInGui(Main.MainGui.OpenButton) and 0 or 0.2)}):Play()
 
@@ -2904,32 +3035,32 @@ Main = (function()
 	Main.CreateMainGui = function()
 		local gui = create({
 			{1,"ScreenGui",{IgnoreGuiInset=true,Name="MainMenu",}},
-			{2,"TextButton",{AnchorPoint=Vector2.new(0.5,0),AutoButtonColor=false,BackgroundColor3=Settings.Theme.Main1,BorderSizePixel=0,Font=Enum.Font.GothamBold,Name="OpenButton",Parent={1},Position=UDim2.new(0.5,0,0,4),Size=UDim2.new(0,86,0,36),Text="DEX++",TextColor3=Settings.Theme.Text,TextSize=15,TextTransparency=0.02,}},
-			{3,"UICorner",{CornerRadius=UDim.new(0,8),Parent={2},}},
-			{4,"Frame",{AnchorPoint=Vector2.new(0.5,0),BackgroundColor3=Settings.Theme.Main2,ClipsDescendants=true,Name="MainFrame",Parent={2},Position=UDim2.new(0.5,0,1,6),Size=UDim2.new(0,360,0,430),}},
-			{5,"UICorner",{CornerRadius=UDim.new(0,8),Parent={4},}},
-			{6,"Frame",{BackgroundColor3=Settings.Theme.Main1,Name="BottomFrame",Parent={4},Position=UDim2.new(0,0,1,-36),Size=UDim2.new(1,0,0,36),}},
-			{7,"UICorner",{CornerRadius=UDim.new(0,8),Parent={6},}},
+			{2,"TextButton",{AnchorPoint=Vector2.new(0.5,0),AutoButtonColor=false,BackgroundColor3=Settings.Theme.Menu,BorderSizePixel=0,Font=Enum.Font.GothamBold,Name="OpenButton",Parent={1},Position=UDim2.new(0.5,0,0,6),Size=UDim2.new(0,96,0,34),Text="DEX++",TextColor3=Settings.Theme.Text,TextSize=14,TextTransparency=0.02,}},
+			{3,"UICorner",{CornerRadius=UDim.new(0,10),Parent={2},}},
+			{4,"Frame",{AnchorPoint=Vector2.new(0.5,0),BackgroundColor3=Settings.Theme.Main2,ClipsDescendants=true,Name="MainFrame",Parent={2},Position=UDim2.new(0.5,0,1,8),Size=UDim2.new(0,430,0,520),}},
+			{5,"UICorner",{CornerRadius=UDim.new(0,12),Parent={4},}},
+			{6,"Frame",{BackgroundColor3=Settings.Theme.Menu,Name="BottomFrame",Parent={4},Position=UDim2.new(0,0,1,-44),Size=UDim2.new(1,0,0,44),}},
+			{7,"UICorner",{CornerRadius=UDim.new(0,12),Parent={6},}},
 			{8,"Frame",{BackgroundColor3=Settings.Theme.Main1,BorderSizePixel=0,Name="CoverFrame",Parent={6},Size=UDim2.new(1,0,0,6),}},
 			{9,"Frame",{BackgroundColor3=Settings.Theme.Outline1,BorderSizePixel=0,Name="Line",Parent={8},Position=UDim2.new(0,0,0,-1),Size=UDim2.new(1,0,0,1),}},
-			{10,"TextButton",{BackgroundColor3=Settings.Theme.Button,BackgroundTransparency=0,BorderSizePixel=0,Font=3,Name="Settings",Parent={6},Position=UDim2.new(1,-76,0,6),Size=UDim2.new(0,30,0,24),Text="",TextColor3=Color3.new(1,1,1),TextSize=14,}},
+			{10,"TextButton",{BackgroundColor3=Settings.Theme.Button,BackgroundTransparency=0,BorderSizePixel=0,Font=3,Name="Settings",Parent={6},Position=UDim2.new(1,-86,0,8),Size=UDim2.new(0,32,0,28),Text="",TextColor3=Color3.new(1,1,1),TextSize=14,}},
 			{11,"ImageLabel",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,Image="rbxassetid://6578871732",ImageColor3=Settings.Theme.Text,ImageTransparency=0.05,Name="Icon",Parent={10},Position=UDim2.new(0.5,-8,0.5,-8),Size=UDim2.new(0,16,0,16),}},
-			{12,"TextButton",{BackgroundColor3=Settings.Theme.Button,BackgroundTransparency=0,BorderSizePixel=0,Font=3,Name="Information",Parent={6},Position=UDim2.new(1,-40,0,6),Size=UDim2.new(0,30,0,24),Text="",TextColor3=Color3.new(1,1,1),TextSize=14,}},
+			{12,"TextButton",{BackgroundColor3=Settings.Theme.Button,BackgroundTransparency=0,BorderSizePixel=0,Font=3,Name="Information",Parent={6},Position=UDim2.new(1,-46,0,8),Size=UDim2.new(0,32,0,28),Text="",TextColor3=Color3.new(1,1,1),TextSize=14,}},
 			{13,"ImageLabel",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,Image="rbxassetid://6578933307",ImageColor3=Settings.Theme.Text,ImageTransparency=0.05,Name="Icon",Parent={12},Position=UDim2.new(0.5,-8,0.5,-8),Size=UDim2.new(0,16,0,16),}},
-			{14,"ScrollingFrame",{Active=true,AnchorPoint=Vector2.new(0.5,0),BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,BorderColor3=Settings.Theme.Outline1,BorderSizePixel=0,Name="AppsFrame",Parent={4},Position=UDim2.new(0.5,0,0,102),ScrollBarImageColor3=Settings.Theme.Highlight,ScrollBarThickness=4,Size=UDim2.new(1,-10,1,-138),}},
-			{15,"Frame",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,Name="Container",Parent={14},Position=UDim2.new(0,10,0,8),Size=UDim2.new(1,-22,0,2),}},
-			{16,"UIGridLayout",{CellPadding=UDim2.new(0,8,0,8),CellSize=UDim2.new(0,104,0,80),Parent={15},SortOrder=2,}},
+			{14,"ScrollingFrame",{Active=true,AnchorPoint=Vector2.new(0.5,0),BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,BorderColor3=Settings.Theme.Outline1,BorderSizePixel=0,Name="AppsFrame",Parent={4},Position=UDim2.new(0.5,0,0,120),ScrollBarImageColor3=Settings.Theme.Highlight,ScrollBarThickness=5,Size=UDim2.new(1,-16,1,-172),}},
+			{15,"Frame",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,Name="Container",Parent={14},Position=UDim2.new(0,8,0,8),Size=UDim2.new(1,-22,0,2),}},
+			{16,"UIGridLayout",{CellPadding=UDim2.new(0,8,0,8),CellSize=UDim2.new(0,194,0,74),Parent={15},SortOrder=2,}},
 			{17,"Frame",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,Name="App",Parent={1},Size=UDim2.new(0,100,0,100),Visible=false,}},
-			{18,"TextButton",{AutoButtonColor=false,BackgroundColor3=Settings.Theme.Button,BorderSizePixel=0,Font=Enum.Font.GothamBold,Name="Main",Parent={17},Size=UDim2.new(1,0,0,72),Text="",TextColor3=Color3.new(0,0,0),TextSize=14,}},
-			{19,"ImageLabel",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,Image="rbxassetid://129589545519436",ImageColor3=Settings.Theme.Text,ImageRectSize=Vector2.new(32,32),Name="Icon",Parent={18},Position=UDim2.new(0.5,-15,0,9),ScaleType=4,Size=UDim2.new(0,30,0,30),}},
-			{20,"TextLabel",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,BorderSizePixel=0,Font=Enum.Font.GothamBold,Name="AppName",Parent={18},Position=UDim2.new(0,8,0,44),Size=UDim2.new(1,-16,1,-46),Text="Explorer",TextColor3=Settings.Theme.Text,TextSize=12,TextTransparency=0.02,TextTruncate=1,TextWrapped=true,TextYAlignment=0,}},
-			{21,"Frame",{BackgroundColor3=Settings.Theme.ListSelection,BorderSizePixel=0,Name="Highlight",Parent={18},Position=UDim2.new(0,0,1,-3),Size=UDim2.new(1,0,0,3),}},
+			{18,"TextButton",{AutoButtonColor=false,BackgroundColor3=Settings.Theme.Button,BorderSizePixel=0,Font=Enum.Font.GothamBold,Name="Main",Parent={17},Size=UDim2.new(1,0,0,74),Text="",TextColor3=Color3.new(0,0,0),TextSize=14,}},
+			{19,"ImageLabel",{BackgroundColor3=Settings.Theme.AccentSoft or Settings.Theme.Main1,BackgroundTransparency=0,Image="rbxassetid://129589545519436",ImageColor3=Settings.Theme.Highlight,ImageRectSize=Vector2.new(32,32),Name="Icon",Parent={18},Position=UDim2.new(0,12,0,13),ScaleType=4,Size=UDim2.new(0,34,0,34),}},
+			{20,"TextLabel",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,BorderSizePixel=0,Font=Enum.Font.GothamBold,Name="AppName",Parent={18},Position=UDim2.new(0,56,0,12),Size=UDim2.new(1,-68,0,20),Text="Explorer",TextColor3=Settings.Theme.Text,TextSize=13,TextTransparency=0.02,TextTruncate=1,TextWrapped=false,TextXAlignment=0,}},
+			{21,"Frame",{BackgroundColor3=Settings.Theme.ListSelection,BorderSizePixel=0,Name="Highlight",Parent={18},Position=UDim2.new(0,0,0,0),Size=UDim2.new(0,3,1,0),}},
 			{22,"UIStroke",{ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=Settings.Theme.Outline1,Thickness=1,Transparency=0.2,Parent={2},}},
 			{23,"UIStroke",{ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=Settings.Theme.Outline1,Thickness=1,Transparency=0.25,Parent={4},}},
-			{24,"Frame",{BackgroundColor3=Settings.Theme.Main1,BorderSizePixel=0,Name="Header",Parent={4},Position=UDim2.new(0,0,0,0),Size=UDim2.new(1,0,0,96),}},
-			{25,"TextLabel",{BackgroundTransparency=1,Font=Enum.Font.GothamBold,Name="Title",Parent={24},Position=UDim2.new(0,14,0,8),Size=UDim2.new(1,-28,0,22),Text="DEX++ Toolkit",TextColor3=Settings.Theme.Text,TextSize=16,TextXAlignment=0,}},
-			{26,"TextLabel",{BackgroundTransparency=1,Font=Enum.Font.Gotham,Name="Subtitle",Parent={24},Position=UDim2.new(0,14,0,29),Size=UDim2.new(1,-28,0,18),Text="Client-side explorer and debugging suite",TextColor3=Settings.Theme.PlaceholderText,TextSize=11,TextXAlignment=0,}},
-			{27,"TextBox",{BackgroundColor3=Settings.Theme.TextBox,BorderSizePixel=0,ClearTextOnFocus=false,Font=Enum.Font.Code,Name="SearchBox",Parent={24},PlaceholderColor3=Settings.Theme.PlaceholderText,PlaceholderText="Search tools or plugins",Position=UDim2.new(0,12,0,56),Size=UDim2.new(1,-24,0,28),Text="",TextColor3=Settings.Theme.Text,TextSize=12,TextXAlignment=0,}},
+			{24,"Frame",{BackgroundColor3=Settings.Theme.Main1,BorderSizePixel=0,Name="Header",Parent={4},Position=UDim2.new(0,0,0,0),Size=UDim2.new(1,0,0,116),}},
+			{25,"TextLabel",{BackgroundTransparency=1,Font=Enum.Font.GothamBold,Name="Title",Parent={24},Position=UDim2.new(0,16,0,10),Size=UDim2.new(1,-32,0,24),Text="DEX++ Command Center",TextColor3=Settings.Theme.Text,TextSize=18,TextXAlignment=0,}},
+			{26,"TextLabel",{BackgroundTransparency=1,Font=Enum.Font.Gotham,Name="Subtitle",Parent={24},Position=UDim2.new(0,16,0,34),Size=UDim2.new(1,-32,0,18),Text="Explorer, search, runtime inspection",TextColor3=Settings.Theme.PlaceholderText,TextSize=12,TextXAlignment=0,}},
+			{27,"TextBox",{BackgroundColor3=Settings.Theme.TextBox,BorderSizePixel=0,ClearTextOnFocus=false,Font=Enum.Font.RobotoMono,Name="SearchBox",Parent={24},PlaceholderColor3=Settings.Theme.PlaceholderText,PlaceholderText="Search tools",Position=UDim2.new(0,14,0,62),Size=UDim2.new(1,-28,0,30),Text="",TextColor3=Settings.Theme.Text,TextSize=12,TextXAlignment=0,}},
 			{28,"UICorner",{CornerRadius=UDim.new(0,6),Parent={27},}},
 			{29,"UIStroke",{ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=Settings.Theme.Outline1,Thickness=1,Transparency=0.35,Parent={27},}},
 			{30,"TextLabel",{BackgroundTransparency=1,Font=Enum.Font.Gotham,Name="AppCount",Parent={6},Position=UDim2.new(0,12,0,0),Size=UDim2.new(1,-98,1,0),Text="0 tools",TextColor3=Settings.Theme.PlaceholderText,TextSize=12,TextXAlignment=0,}},
@@ -2955,22 +3086,22 @@ Main = (function()
 		-- Dynamically modify dimensions to make space for category tabs
 		local mainFrame = gui.OpenButton.MainFrame
 		local header = mainFrame.Header
-		header.Size = UDim2.new(1, 0, 0, 128)
-		mainFrame.AppsFrame.Position = UDim2.new(0.5, 0, 0, 134)
-		mainFrame.AppsFrame.Size = UDim2.new(1, -10, 1, -170)
+		header.Size = UDim2.new(1, 0, 0, 142)
+		mainFrame.AppsFrame.Position = UDim2.new(0.5, 0, 0, 148)
+		mainFrame.AppsFrame.Size = UDim2.new(1, -16, 1, -196)
 
 		-- Create tabs container
 		local tabContainer = Instance.new("Frame")
 		tabContainer.Name = "CategoryTabs"
 		tabContainer.BackgroundTransparency = 1
-		tabContainer.Position = UDim2.new(0, 12, 0, 92)
-		tabContainer.Size = UDim2.new(1, -24, 0, 26)
+		tabContainer.Position = UDim2.new(0, 14, 0, 104)
+		tabContainer.Size = UDim2.new(1, -28, 0, 28)
 		tabContainer.Parent = header
 
 		local tabLayout = Instance.new("UIListLayout")
 		tabLayout.FillDirection = Enum.FillDirection.Horizontal
-		tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		tabLayout.Padding = UDim.new(0, 4)
+		tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+		tabLayout.Padding = UDim.new(0, 6)
 		tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
 		tabLayout.Parent = tabContainer
 
@@ -2980,11 +3111,12 @@ Main = (function()
 		local function updateTabVisuals()
 			for cat, btn in pairs(tabButtons) do
 				local active = (cat == currentCategory)
-				btn.BackgroundColor3 = active and Settings.Theme.Highlight or Settings.Theme.Button
+				btn.BackgroundColor3 = active and (Settings.Theme.AccentSoft or Settings.Theme.Main1) or Settings.Theme.Button
 				btn.TextColor3 = active and Settings.Theme.Text or Settings.Theme.PlaceholderText
 				local stroke = btn:FindFirstChild("UIStroke")
 				if stroke then
 					stroke.Color = active and Settings.Theme.Highlight or Settings.Theme.Outline1
+					stroke.Transparency = active and 0.08 or 0.42
 				end
 			end
 		end
@@ -2995,8 +3127,8 @@ Main = (function()
 			btn.AutoButtonColor = false
 			btn.BackgroundColor3 = Settings.Theme.Button
 			btn.BorderSizePixel = 0
-			btn.Font = Enum.Font.SourceSansBold
-			btn.Size = UDim2.new(0, cat == "Advanced" and 64 or (cat == "Search" and 56 or 48), 1, 0)
+			btn.Font = Enum.Font.GothamBold
+			btn.Size = UDim2.new(0, cat == "Advanced" and 78 or (cat == "Search" and 68 or (cat == "Spy" and 84 or 58)), 1, 0)
 			btn.Text = cat == "Spy" and "Spy & Hook" or (cat == "Search" and "Search" or cat)
 			btn.TextColor3 = Settings.Theme.PlaceholderText
 			btn.TextSize = 11
@@ -3022,13 +3154,19 @@ Main = (function()
 				Main.ApplyMenuFilter()
 			end)
 
-			Lib.ButtonAnim(btn, {
-				Mode = 2,
-				StartColor = Settings.Theme.Button,
-				HoverColor = Settings.Theme.ButtonHover,
-				PressColor = Settings.Theme.ButtonPress,
-				OutlineColor = Settings.Theme.Outline2
-			})
+			btn.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+					if cat ~= currentCategory then
+						btn.BackgroundColor3 = Settings.Theme.Main1
+					end
+				end
+			end)
+
+			btn.InputEnded:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+					updateTabVisuals()
+				end
+			end)
 		end
 
 		updateTabVisuals()
@@ -3042,7 +3180,7 @@ Main = (function()
 			Main.ApplyMenuFilter()
 		end)
 		Main.AppsContainerGrid:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(Main.UpdateMenuCanvas)
-		Main.SmoothScrollingFrame(Main.AppsFrame, 104)
+		Main.SmoothScrollingFrame(Main.AppsFrame, 84)
 		openButton.MouseButton1Click:Connect(function()
 			Main.SetMainGuiOpen(not Main.MainGuiOpen)
 		end)
@@ -3135,36 +3273,29 @@ Main = (function()
 
 		Main.CreateLazyWindowApp({Name = "Save Instance", IconMap = Main.LargeIcons, Icon = "Book", Module = SaveInstance})
 
-		Main.CreateLazyWindowApp({Name = "3D Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ModelViewer})
+		Main.CreateLazyWindowApp({Name = "3D Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ModelViewer, Hidden = true})
 
-		Main.CreateLazyWindowApp({Name = "Code Search", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = CodeSearch})
+		Main.CreateLazyWindowApp({Name = "Search Center", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = CodeSearch})
+		Main.CreateLazyWindowApp({Name = "Script Relations", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ScriptRelations, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Dependency Graph", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = DependencyGraph, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Smart Search", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = SmartSearch, Hidden = true})
 
-		Main.CreateLazyWindowApp({Name = "Script Relations", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ScriptRelations})
+		Main.CreateLazyWindowApp({Name = "Image Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ImageViewer, Hidden = true})
 
-		Main.CreateLazyWindowApp({Name = "Remote Usage", IconMap = Main.LargeIcons, Icon = "Output", Module = RemoteUsageMap})
-
-		Main.CreateLazyWindowApp({Name = "Object Links", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ObjectLinks})
-
-		Main.CreateLazyWindowApp({Name = "Image Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ImageViewer})
-
-		Main.CreateLazyWindowApp({Name = "Activity Map", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ActivityMap})
-
-		Main.CreateLazyWindowApp({Name = "Dependency Graph", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = DependencyGraph})
-
-		Main.CreateLazyWindowApp({Name = "Smart Search", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = SmartSearch})
-
-		Main.CreateLazyWindowApp({Name = "Runtime Inspector", IconMap = Main.LargeIcons, Icon = "Watcher", Module = RuntimeInspector})
-
-		Main.CreateLazyWindowApp({Name = "Client Intelligence", IconMap = Main.LargeIcons, Icon = "Output", Module = ClientIntelligence})
+		Main.CreateLazyWindowApp({Name = "Runtime Monitor", IconMap = Main.LargeIcons, Icon = "Watcher", Module = RuntimeInspector})
+		Main.CreateLazyWindowApp({Name = "Remote Usage", IconMap = Main.LargeIcons, Icon = "Output", Module = RemoteUsageMap, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Object Links", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ObjectLinks, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Activity Map", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ActivityMap, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Client Intelligence", IconMap = Main.LargeIcons, Icon = "Output", Module = ClientIntelligence, Hidden = true})
 
 		Main.CreateLazyWindowApp({Name = "Inspector Hub", IconMap = Main.LargeIcons, Icon = "Watcher", Module = InspectorHub})
 
-		Main.CreateLazyWindowApp({Name = "Task Router", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = TaskRouter})
+		Main.CreateLazyWindowApp({Name = "Task Router", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = TaskRouter, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Control Center", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ControlCenter})
 
-		Main.CreateLazyWindowApp({Name = "Security Auditor", IconMap = Main.LargeIcons, Icon = "Watcher", Module = SecurityAuditor})
-		Main.CreateLazyWindowApp({Name = "Property Tracker", IconMap = Main.LargeIcons, Icon = "Watcher", Module = PropertyTracker})
-		Main.CreateLazyWindowApp({Name = "Thread Manager", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = ThreadManager})
+		Main.CreateLazyWindowApp({Name = "Security Auditor", IconMap = Main.LargeIcons, Icon = "Watcher", Module = SecurityAuditor, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Property Tracker", IconMap = Main.LargeIcons, Icon = "Watcher", Module = PropertyTracker, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Thread Manager", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = ThreadManager, Hidden = true})
 		Main.CreateApp({Name = "Serialize Inst", IconMap = Main.LargeIcons, Icon = "Object", OnClick = function(callback)
 			if callback then
 				if InstanceSerializer then InstanceSerializer.Init() end
