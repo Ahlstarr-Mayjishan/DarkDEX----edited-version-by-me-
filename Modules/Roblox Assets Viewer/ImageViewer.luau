@@ -133,10 +133,12 @@ local function main()
 			local ok, list = pcall(root.GetDescendants, root)
 			descendants = ok and list or {}
 		end
+		local count = 0
 		for _, obj in pairs(descendants) do
+			count += 1
 			collectFrom(obj, results, limit)
 			if #results >= limit then break end
-			if #results % 40 == 0 then task.wait() end
+			if count % 200 == 0 then task.wait() end
 		end
 		return results
 	end

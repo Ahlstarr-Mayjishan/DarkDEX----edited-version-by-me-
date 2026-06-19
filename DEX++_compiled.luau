@@ -246,6 +246,8 @@ end,
     
     local function main()
     	local Lib = {}
+    	Lib.create = create
+    	Lib.createSimple = createSimple
     
     	local renderStepped = service.RunService.RenderStepped
     	local signalWait = renderStepped.wait
@@ -8485,7 +8487,12 @@ end,
     			end
     		else
     			-- Fallback to workspace descendants
+    			local count = 0
     			for _, v in ipairs(game:GetDescendants()) do
+    				count = count + 1
+    				if count % 250 == 0 then
+    					task.wait()
+    				end
     				if v:IsA("LocalScript") or v:IsA("ModuleScript") then
     					table.insert(scriptList, v)
     				end
@@ -8792,8 +8799,10 @@ end,
     		listLayout.Parent = listFrame
     
     		-- Initial Load
-    		refreshScripts()
-    		ThreadManager.Render()
+    		task.spawn(function()
+    			refreshScripts()
+    			ThreadManager.Render()
+    		end)
     		reportTool()
     	end
     
@@ -8815,7 +8824,7 @@ end,
     
     -- Common Locals
     local Main,Lib,Apps,Settings -- Main Containers
-    local Explorer, Properties, Notepad, ModelViewer, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, Notebook -- Major Apps
+    local Explorer, Properties, Notepad, ModelViewer, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, Notebook -- Major Apps
     local API,RMD,env,service,plr,create,createSimple -- Main Locals
     
     local function initDeps(data)
@@ -8842,6 +8851,8 @@ end,
     	RemoteUsageMap = Apps.RemoteUsageMap
     	ObjectLinks = Apps.ObjectLinks
     	ImageViewer = Apps.ImageViewer
+    	SoundViewer = Apps.SoundViewer
+    	AnimationViewer = Apps.AnimationViewer
     	Notebook = Apps.Notebook
     end
     
@@ -9891,7 +9902,13 @@ end,
     		if env.setclipboard then context:AddRegistered("COPY_PATH") end
     		if env.setclipboard then context:AddRegistered("COPY_TO_AI") end
     		context:AddRegistered("FIND_OBJECT_LINKS", #sList ~= 1 or not ObjectLinks)
-    		context:AddRegistered("VIEW_IMAGE_ASSETS", #sList ~= 1 or not ImageViewer)
+    		if #sList == 1 and sList[1].Obj:IsA("Sound") then
+    			context:AddRegistered("VIEW_SOUND_ASSETS", not SoundViewer)
+    		elseif #sList == 1 and sList[1].Obj:IsA("Animation") then
+    			context:AddRegistered("VIEW_ANIMATION_ASSETS", not AnimationViewer)
+    		else
+    			context:AddRegistered("VIEW_IMAGE_ASSETS", #sList ~= 1 or not ImageViewer)
+    		end
     		context:AddRegistered("INSERT_OBJECT")
     		context:AddRegistered("SAVE_INST")
     		context:AddRegistered("TRACK_PROPERTIES", #sList ~= 1)
@@ -10603,6 +10620,16 @@ end,
     		context:Register("VIEW_IMAGE_ASSETS",{Name = "View Images", IconMap = Explorer.MiscIcons, Icon = "ViewScript", DisabledIcon = "Empty", OnClick = function()
     			local obj = selection.List[1] and selection.List[1].Obj
     			if obj and ensureTool(ImageViewer) then ImageViewer.ShowForObject(obj) end
+    		end})
+    
+    		context:Register("VIEW_SOUND_ASSETS",{Name = "Preview Sound", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			if obj and ensureTool(SoundViewer) then SoundViewer.ShowForObject(obj) end
+    		end})
+    
+    		context:Register("VIEW_ANIMATION_ASSETS",{Name = "Preview Animation", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			if obj and ensureTool(AnimationViewer) then AnimationViewer.ShowForObject(obj) end
     		end})
     
     		context:Register("COPY_API_PAGE",{Name = "Copy Roblox API Page URL", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function()
@@ -14147,629 +14174,6 @@ end,
     	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
     end
 end,
-["ModelViewer"] = function()
-    --[[
-    	Model Viewer App Module
-    --[[
-    	Model Viewer App Module
-    	
-    	A model viewer :3
-    ]]
-    
-    -- Common Locals
-    local Main,Lib,Apps,Settings -- Main Containers
-    local Explorer, Properties, Notepad, ModelViewer, Notebook -- Major Apps
-    local API,RMD,env,service,plr,create,createSimple -- Main Locals
-    
-    local function initDeps(data)
-    	Main = data.Main
-    	Lib = data.Lib
-    	Apps = data.Apps
-    	Settings = data.Settings
-    
-    	API = data.API
-    	RMD = data.RMD
-    	env = data.env
-    	service = data.service
-    	plr = data.plr
-    	create = data.create
-    	createSimple = data.createSimple
-    end
-    
-    local function initAfterMain()
-    	Explorer = Apps.Explorer
-    	Properties = Apps.Properties
-    	Notepad = Apps.Notepad
-    	Notebook = Apps.Notebook
-    end
-    
-    local function getPath(obj)
-        if Main and Main.SafeGetInstancePath then
-            return Main.SafeGetInstancePath(obj)
-        end
-        if not obj then return "?" end
-        if obj.Parent == nil then return "Nil parented" end
-        local ok, fullName = pcall(function()
-            return obj:GetFullName()
-        end)
-        return ok and fullName or tostring(obj)
-    end
-    
-    local function main()
-    	local RunService = game:GetService("RunService")
-    	local UserInputService = game:GetService("UserInputService")
-    	
-    	local ModelViewer = {
-    		EnableInputCamera = true,
-    		IsViewing = false,
-    		AutoRefresh = false,
-    		ZoomMultiplier = 2,
-    		AutoRotate = true,
-    		RotationSpeed = 0.01,
-    		RefreshRate = 30 -- hertz
-    	}
-    	
-    	local window, viewportFrame, pathLabel, settingsButton
-    	local model, camera, originalModel
-    	
-    	
-    	ModelViewer.StopViewModel = function(updating)
-    		if updating then
-    			viewportFrame:FindFirstChildOfClass("Model"):Destroy()
-    		else
-    			if camera then camera = nil end
-    			if model then model = nil end
-    			viewportFrame:ClearAllChildren()
-    			
-    			ModelViewer.IsViewing = false
-    			window:SetTitle("3D Preview")
-    			pathLabel.Gui.Text = ""
-    		end
-    	end
-    
-    	ModelViewer.ViewModel = function(item, updating)
-    		if not item then return end
-    		ModelViewer.StopViewModel(updating)
-    		
-    		if item ~= workspace and not item:IsA("Terrain") then
-    			-- why Model == workspace
-    			-- wtf?
-    			
-    			if item:IsA("BasePart") and not item:IsA("Model") then			
-    				model = Instance.new("Model")
-    				model.Parent = viewportFrame
-    
-    				local clone = item:Clone()
-    				clone.Parent = model
-    				model.PrimaryPart = clone
-    				model:SetPrimaryPartCFrame(CFrame.new(0, 0, 0))
-    			elseif item:IsA("Model") then
-    				item.Archivable = true
-    
-    			--[[if not item.PrimaryPart then
-    				pathLabel.Gui.Text = "Failed to view model: No PrimaryPart is found."
-    				return
-    			end]]
-    				if #item:GetChildren() == 0 then return end
-    				
-    				model = item:Clone()
-    				model.Parent = viewportFrame
-    
-    				-- fallback
-    				if not model.PrimaryPart then
-    					local found = false
-    					for _, child in model:GetDescendants() do
-    						if child:IsA("BasePart") then
-    							model.PrimaryPart = child
-    							model:SetPrimaryPartCFrame(CFrame.new(0, 0, 0))
-    							found = true
-    							break
-    						end
-    					end
-    					if not found then
-    						model:Destroy()
-    						model = nil
-    						return
-    					end
-    				end
-    			else
-    				return
-    			end
-    		end
-    		
-    		originalModel = item
-    		
-    		if ModelViewer.AutoRefresh and not updating then
-    			task.spawn(function()
-    				while model and ModelViewer.AutoRefresh do
-    					
-    					ModelViewer.ViewModel(originalModel, true)
-    					task.wait(1 / ModelViewer.RefreshRate)
-    				end
-    			end)
-    		end
-    		
-    		if not updating then
-    			camera = Instance.new("Camera")
-    			viewportFrame.CurrentCamera = camera
-    
-    			camera.Parent = viewportFrame
-    			camera.FieldOfView = 60
-    			
-    			window:SetTitle(item.Name.." - 3D Preview")
-    			pathLabel.Gui.Text = "path: " .. getPath(originalModel)
-    			window:Show()
-    			ModelViewer.IsViewing = true
-    		end
-    	end
-    
-    	ModelViewer.Init = function()
-    		window = Lib.Window.new()
-    		window:SetTitle("3D Preview")
-    		window:Resize(350,200)
-    		ModelViewer.Window =  window
-    		
-    		viewportFrame = Instance.new("ViewportFrame")
-    		viewportFrame.Parent = window.GuiElems.Content
-    		viewportFrame.BackgroundTransparency = 1
-    		viewportFrame.Size = UDim2.new(1,0,1,0)
-    		
-    		pathLabel = Lib.Label.new()
-    		pathLabel.Gui.Parent = window.GuiElems.Content
-    		pathLabel.Gui.AnchorPoint = Vector2.new(0,1)
-    		pathLabel.Gui.Text = ""
-    		pathLabel.Gui.TextSize = 12
-    		pathLabel.Gui.TextTransparency = 0.8
-    		pathLabel.Gui.Position = UDim2.new(0,1,1,0)
-    		pathLabel.Gui.Size = UDim2.new(1,-1,0,15)
-    		pathLabel.Gui.BackgroundTransparency = 1
-    		
-    		settingsButton = Instance.new("ImageButton",window.GuiElems.Content)
-    		settingsButton.AnchorPoint = Vector2.new(1,0)
-    		settingsButton.BackgroundTransparency = 1
-    		settingsButton.Size = UDim2.new(0,15,0,15)
-    		settingsButton.Position = UDim2.new(1,-3,0,3)
-    		settingsButton.Image = "rbxassetid://6578871732"
-    		settingsButton.ImageTransparency = 0.5
-    		-- mobile input check
-    		if UserInputService:GetLastInputType() == Enum.UserInputType.Touch then
-    			settingsButton.Visible = true
-    		else
-    			settingsButton.Visible = false
-    		end
-    
-    		local rotationX, rotationY = -15, 0
-    		local distance = 10
-    		local dragging = false
-    		local hovering = false
-    		local lastpos = Vector2.zero
-    
-    		viewportFrame.InputBegan:Connect(function(input)
-    			if not ModelViewer.EnableInputCamera then return end
-    			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-    				dragging = true
-    				lastpos = input.Position
-    			elseif input.KeyCode == Enum.KeyCode.LeftShift then
-    				ModelViewer.ZoomMultiplier = 10
-    			end
-    		end)
-    		
-    
-    		viewportFrame.MouseEnter:Connect(function()
-    			hovering = true
-    		end)
-    		viewportFrame.MouseLeave:Connect(function()
-    			hovering = false
-    		end)
-    
-    		viewportFrame.InputEnded:Connect(function(input)
-    			if not ModelViewer.EnableInputCamera then return end
-    			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-    				dragging = false
-    			elseif input.KeyCode == Enum.KeyCode.LeftShift then
-    				ModelViewer.ZoomMultiplier = 2
-    			end
-    		end)
-    
-    		viewportFrame.InputChanged:Connect(function(input)
-    			if not ModelViewer.EnableInputCamera then return end
-    			if dragging and input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-    				local delta = input.Position - lastpos
-    				lastpos = input.Position
-    
-    				rotationY -= delta.X * 0.01
-    				rotationX -= delta.Y * 0.01
-    				rotationX = math.clamp(rotationX, -math.pi/2 + 0.1, math.pi/2 - 0.1)
-    			end
-    
-    			if input.UserInputType == Enum.UserInputType.MouseWheel and hovering then
-    				distance = math.clamp(distance - (input.Position.Z * ModelViewer.ZoomMultiplier), 0.1, math.huge)
-    			end
-    		end)
-    
-    		RunService.RenderStepped:Connect(function(dt)
-    			if camera and model then
-    				if not dragging and ModelViewer.AutoRotate then
-    					rotationY += ModelViewer.RotationSpeed * dt * 60
-    				end
-    				
-    				local center = model.PrimaryPart.Position
-    				local offset = CFrame.new(0, 0, distance)
-    				local rotation = CFrame.Angles(0, rotationY, 0) * CFrame.Angles(rotationX, 0, 0)
-    
-    				local camCF = CFrame.new(center) * rotation * offset
-    
-    				camera.CFrame = CFrame.lookAt(camCF.Position, center)
-    				
-    			end
-    		end)
-    		
-    		-- context stuffs
-    		local context = Lib.ContextMenu.new()
-    		
-    		local absoluteSize = context.Gui.AbsoluteSize
-    		context.MaxHeight = (absoluteSize.Y <= 600 and (absoluteSize.Y - 40)) or nil
-    
-    		-- Registers
-    		context:Register("STOP",{Name = "Stop Viewing", OnClick = function()
-    			ModelViewer.StopViewModel()
-    		end})
-    		context:Register("EXIT",{Name = "Exit", OnClick = function()
-    			ModelViewer.StopViewModel()
-    			context:Hide()
-    			window:Hide()
-    		end})
-    		context:Register("COPY_PATH",{Name = "Copy Path", OnClick = function()
-    			if model then
-    				env.setclipboard(getPath(originalModel))
-    			end
-    		end})
-    		context:Register("REFRESH",{Name = "Refresh", OnClick = function()
-    			if originalModel then
-    				ModelViewer.ViewModel(originalModel)
-    			end
-    		end})
-    		context:Register("ENABLE_AUTO_REFRESH",{Name = "Enable Auto Refresh", OnClick = function()
-    			if originalModel then
-    				ModelViewer.AutoRefresh = true
-    				ModelViewer.ViewModel(originalModel)
-    			end
-    		end})
-    		context:Register("DISABLE_AUTO_REFRESH",{Name = "Disable Auto Refresh", OnClick = function()
-    			if originalModel then
-    				ModelViewer.AutoRefresh = false
-    				ModelViewer.ViewModel(originalModel)
-    			end
-    		end})
-    		context:Register("SAVE_INST",{Name = "Save to File", OnClick = function()
-    			if model then
-    				Lib.SaveAsPrompt("Place_"..game.PlaceId.."_"..originalModel.Name.."_"..os.time(), function(filename)
-    					window:SetTitle(originalModel.Name.." - Model Viewer - Saving")	
-    					
-    					local success, result = pcall(env.saveinstance,
-    					originalModel, filename,
-    						{
-    							Decompile = true,
-    							RemovePlayerCharacters = false
-    						}
-    					)
-    					
-    					if success then
-    						window:SetTitle(originalModel.Name.." - Model Viewer - Saved")
-    						context:Hide()
-    						task.wait(5)
-    						if model then
-    							window:SetTitle(originalModel.Name.." - Model Viewer")
-    						end
-    					else
-    						window:SetTitle(originalModel.Name.." - Model Viewer - Error")
-    						warn("Error while saving model: "..result)
-    						context:Hide()
-    						task.wait(5)
-    						if model then
-    							window:SetTitle(originalModel.Name.." - Model Viewer")
-    						end
-    					end
-    				end)
-    			end
-    		end})
-    		
-    		context:Register("ENABLE_AUTO_ROTATE",{Name = "Enable Auto Rotate", OnClick = function()
-    			ModelViewer.AutoRotate = true
-    			
-    		end})
-    		context:Register("DISABLE_AUTO_ROTATE",{Name = "Disable Auto Rotate", OnClick = function()
-    			ModelViewer.AutoRotate = false
-    		end})
-    		context:Register("LOCK_CAM",{Name = "Lock Camera", OnClick = function()
-    			ModelViewer.EnableInputCamera = false
-    		end})
-    		context:Register("UNLOCK_CAM",{Name = "Unlock Camera", OnClick = function()
-    			ModelViewer.EnableInputCamera = true
-    		end})
-    		
-    		context:Register("ZOOM_IN",{Name = "Zoom In", OnClick = function()
-    			distance = math.clamp(distance - (ModelViewer.ZoomMultiplier * 2), 2, math.huge)
-    		end})
-    		
-    		context:Register("ZOOM_OUT",{Name = "Zoom Out", OnClick = function()
-    			distance = math.clamp(distance + (ModelViewer.ZoomMultiplier * 2), 2, math.huge)
-    		end})
-    		
-    		local function ShowContext()
-    			context:Clear()
-    
-    			context:AddRegistered("STOP", not ModelViewer.IsViewing)	
-    			context:AddRegistered("REFRESH", not ModelViewer.IsViewing)
-    			context:AddRegistered("COPY_PATH", not ModelViewer.IsViewing)
-    			context:AddRegistered("SAVE_INST", not ModelViewer.IsViewing)
-    			context:AddDivider()
-    			
-    			if env.isonmobile then
-    				context:AddRegistered("ZOOM_IN")
-    				context:AddRegistered("ZOOM_OUT")
-    				context:AddDivider()
-    			end
-    
-    			if ModelViewer.AutoRotate then
-    				context:AddRegistered("DISABLE_AUTO_ROTATE")
-    			else
-    				context:AddRegistered("ENABLE_AUTO_ROTATE")
-    			end
-    			if ModelViewer.AutoRefresh then
-    				context:AddRegistered("DISABLE_AUTO_REFRESH")
-    			else
-    				context:AddRegistered("ENABLE_AUTO_REFRESH")
-    			end
-    			if ModelViewer.EnableInputCamera then
-    				context:AddRegistered("LOCK_CAM")
-    			else
-    				context:AddRegistered("UNLOCK_CAM")
-    			end
-    
-    			context:AddDivider()
-    
-    			context:AddRegistered("EXIT")
-    
-    			context:Show()
-    		end
-    		
-    		local function HideContext()
-    			context:Hide()
-    		end
-    		
-    		viewportFrame.InputBegan:Connect(function(input)
-    			if input.UserInputType == Enum.UserInputType.MouseButton2 then
-    				ShowContext()
-    			elseif input.UserInputType == Enum.UserInputType.MouseButton1 and Lib.CheckMouseInGui(context.Gui) then
-    				HideContext()
-    			end
-    		end)
-    		settingsButton.MouseButton1Click:Connect(function()
-    			ShowContext()
-    		end)
-    	end
-    
-    	return ModelViewer
-    end
-    
-    -- TODO: Remove when open source
-    if gethsfuncs then
-    	_G.moduleData = {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
-    else
-    	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
-    end
-end,
-["ImageViewer"] = function()
-    --!strict
-    --[[
-    	Image Viewer App Module
-    	Previews image-like asset properties from selected instances.
-    ]]
-    local Main,Lib,Apps,Settings
-    local Explorer, ImageViewer, Notebook
-    local API,RMD,env,service,plr,create,createSimple
-    
-    local function initDeps(data)
-    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
-    	API, RMD, env, service, plr = data.API, data.RMD, data.env, data.service, data.plr
-    	create, createSimple = data.create, data.createSimple
-    end
-    
-    local function initAfterMain()
-    	Explorer = Apps.Explorer
-    	ImageViewer = Apps.ImageViewer
-    	Notebook = Apps.Notebook
-    end
-    
-    local function main()
-    	local ImageViewer = {}
-    	local window, preview, titleLabel, detailLabel, listFrame
-    	local currentItems = {}
-    	local selectedItem = nil
-    
-    	local imagePropsByClass = {
-    		Decal = {"Texture"},
-    		Texture = {"Texture"},
-    		ImageLabel = {"Image"},
-    		ImageButton = {"Image", "HoverImage", "PressedImage"},
-    		ImageHandleAdornment = {"Image"},
-    		ParticleEmitter = {"Texture"},
-    		Trail = {"Texture"},
-    		Beam = {"Texture"},
-    		MeshPart = {"TextureID"},
-    		SpecialMesh = {"TextureId"},
-    		SurfaceAppearance = {"ColorMap", "NormalMap", "MetalnessMap", "RoughnessMap"},
-    		Sky = {"SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp"},
-    		Shirt = {"ShirtTemplate"},
-    		Pants = {"PantsTemplate"},
-    		ShirtGraphic = {"Graphic"},
-    	}
-    
-    	local function getPath(obj)
-            if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(obj) end
-    		local ok, path = pcall(function()
-    			if Explorer and Explorer.GetInstancePath then return Explorer.GetInstancePath(obj) end
-    			return obj:GetFullName()
-    		end)
-    		return ok and tostring(path) or tostring(obj)
-    	end
-    
-    	local function normalizeAsset(value)
-    		value = tostring(value or "")
-    		if value == "" then return "" end
-    		local id = value:match("rbxassetid://(%d+)") or value:match("[?&]id=(%d+)") or value:match("asset/%?id=(%d+)") or value:match("(%d+)")
-    		if id and value:find("rbxassetid://", 1, true) == nil then
-    			return "rbxassetid://" .. id
-    		end
-    		return value
-    	end
-    
-    	local function clearRows()
-    		if not listFrame then return end
-    		for _, child in pairs(listFrame:GetChildren()) do
-    			if child:IsA("GuiButton") or child:IsA("TextLabel") then child:Destroy() end
-    		end
-    	end
-    
-    	local function setPreview(item)
-    		selectedItem = item
-    		if not preview or not titleLabel or not detailLabel then return end
-    		if not item then
-    			preview.Image = ""
-    			titleLabel.Text = "No image selected"
-    			detailLabel.Text = "Right click an image object or a folder/model containing image assets."
-    			return
-    		end
-    		preview.Image = item.Asset
-    		titleLabel.Text = item.Object.Name .. "." .. item.Property
-    		detailLabel.Text = item.Asset .. " | " .. item.Path
-    	end
-    
-    	local function addRow(item)
-    		local row = createSimple("TextButton",{
-    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Main2, BorderColor3 = Settings.Theme.Outline1,
-    			BorderSizePixel = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,42),
-    			Text = "", Parent = listFrame
-    		})
-    		createSimple("TextLabel",{
-    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,2),
-    			Size = UDim2.new(1,-16,0,18), Text = item.Object.Name .. " [" .. item.Object.ClassName .. "] ." .. item.Property,
-    			TextColor3 = Settings.Theme.Text, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd,
-    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
-    		})
-    		createSimple("TextLabel",{
-    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,21),
-    			Size = UDim2.new(1,-16,0,18), Text = item.Asset,
-    			TextColor3 = Settings.Theme.PlaceholderText, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd,
-    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
-    		})
-    		Lib.ButtonAnim(row,{Mode=2, StartColor=Settings.Theme.Main2, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline1})
-    		row.MouseButton1Click:Connect(function()
-    			setPreview(item)
-    		end)
-    	end
-    
-    	local function collectFrom(obj, results, limit)
-    		local props = imagePropsByClass[obj.ClassName]
-    		if props then
-    			for _, prop in ipairs(props) do
-    				local ok, value = pcall(function() return obj[prop] end)
-    				local asset = ok and normalizeAsset(value) or ""
-    				if asset ~= "" then
-    					results[#results + 1] = {Object = obj, Property = prop, Asset = asset, Path = getPath(obj)}
-    					if #results >= limit then return end
-    				end
-    			end
-    		end
-    	end
-    
-    	local function collectImages(root)
-    		local results = {}
-    		local limit = 160
-    		collectFrom(root, results, limit)
-    		if #results >= limit then return results end
-    		local descendants = nil
-    		if root == game and env.RefreshClientSurface then
-    			descendants = env.RefreshClientSurface(false, false).AllInstances
-    		else
-    			local ok, list = pcall(root.GetDescendants, root)
-    			descendants = ok and list or {}
-    		end
-    		for _, obj in pairs(descendants) do
-    			collectFrom(obj, results, limit)
-    			if #results >= limit then break end
-    			if #results % 40 == 0 then task.wait() end
-    		end
-    		return results
-    	end
-    
-    	ImageViewer.ShowForObject = function(obj)
-    		if typeof(obj) ~= "Instance" then return end
-    		currentItems = collectImages(obj)
-    		clearRows()
-    		window:SetTitle("Image Viewer - " .. obj.Name)
-    		for _, item in ipairs(currentItems) do addRow(item) end
-    		if #currentItems == 0 then
-    			local label = createSimple("TextLabel",{
-    				BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,24),
-    				Text = "No image assets found in selected object.", TextColor3 = Settings.Theme.PlaceholderText,
-    				TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = listFrame
-    			})
-    			local pad = Instance.new("UIPadding")
-    			pad.PaddingLeft = UDim.new(0,6)
-    			pad.Parent = label
-    			setPreview(nil)
-    		else
-    			setPreview(currentItems[1])
-    		end
-    		window:Show()
-    	end
-    
-    	local function makeButton(parent, text, pos, size, callback)
-    		local button = createSimple("TextButton",{
-    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Button, BorderColor3 = Settings.Theme.Outline2,
-    			Font = Enum.Font.SourceSans, Position = pos, Size = size, Text = text,
-    			TextColor3 = Settings.Theme.Text, TextSize = 14, Parent = parent
-    		})
-    		button.MouseButton1Click:Connect(callback)
-    		Lib.ButtonAnim(button,{Mode=2, StartColor=Settings.Theme.Button, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline2})
-    	end
-    
-    	ImageViewer.Init = function()
-    		window = Lib.Window.new()
-    		window:SetTitle("Image Viewer")
-    		window:Resize(620,430)
-    		ImageViewer.Window = window
-    		local content = window.GuiElems.Content
-    		local previewPane = createSimple("Frame",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Position=UDim2.new(0,0,0,0), Size=UDim2.new(0.48,0,1,0), Parent=content})
-    		preview = createSimple("ImageLabel",{BackgroundColor3=Settings.Theme.TextBox, BorderColor3=Settings.Theme.Outline1, Position=UDim2.new(0,8,0,8), Size=UDim2.new(1,-16,1,-88), ScaleType=Enum.ScaleType.Fit, Image="", Parent=previewPane})
-    		titleLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Position=UDim2.new(0,8,1,-76), Size=UDim2.new(1,-16,0,22), Text="No image selected", TextColor3=Settings.Theme.Text, TextSize=14, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=previewPane})
-    		detailLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,1,-54), Size=UDim2.new(1,-16,0,22), Text="", TextColor3=Settings.Theme.PlaceholderText, TextSize=13, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=previewPane})
-    		makeButton(previewPane, "Copy Asset", UDim2.new(0,8,1,-28), UDim2.new(0,96,0,22), function()
-    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Asset) end
-    		end)
-    		makeButton(previewPane, "Copy Path", UDim2.new(0,110,1,-28), UDim2.new(0,86,0,22), function()
-    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Path) end
-    		end)
-    		listFrame = createSimple("ScrollingFrame",{Active=true, AutomaticCanvasSize=Enum.AutomaticSize.Y, BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, BottomImage="", CanvasSize=UDim2.new(0,0,0,0), Position=UDim2.new(0.48,1,0,0), ScrollBarImageColor3=Color3.fromRGB(70,70,70), ScrollBarThickness=10, Size=UDim2.new(0.52,-1,1,0), TopImage="", Parent=content})
-    		local layout = Instance.new("UIListLayout")
-    		layout.Padding = UDim.new(0,4)
-    		layout.SortOrder = Enum.SortOrder.LayoutOrder
-    		layout.Parent = listFrame
-    		local pad = Instance.new("UIPadding")
-    		pad.PaddingBottom, pad.PaddingLeft, pad.PaddingRight, pad.PaddingTop = UDim.new(0,6), UDim.new(0,4), UDim.new(0,4), UDim.new(0,4)
-    		pad.Parent = listFrame
-    	end
-    	return ImageViewer
-    end
-    
-    if gethsfuncs then
-    	_G.moduleData = {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
-    else
-    	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
-    end
-end,
 ["ObjectLinks"] = function()
     --!strict
     --[[
@@ -15343,6 +14747,1605 @@ end,
     	end
     
     	return InstanceSerializer
+    end
+    
+    if gethsfuncs then
+    	_G.moduleData = {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    else
+    	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    end
+end,
+["ModelViewer"] = function()
+    --[[
+    	Model Viewer App Module
+    	
+    	A model viewer :3
+    ]]
+    
+    -- Common Locals
+    local Main,Lib,Apps,Settings -- Main Containers
+    local Explorer, Properties, Notepad, ModelViewer, Notebook -- Major Apps
+    local API,RMD,env,service,plr,create,createSimple -- Main Locals
+    
+    local function initDeps(data)
+    	Main = data.Main
+    	Lib = data.Lib
+    	Apps = data.Apps
+    	Settings = data.Settings
+    
+    	API = data.API
+    	RMD = data.RMD
+    	env = data.env
+    	service = data.service
+    	plr = data.plr
+    	create = data.create
+    	createSimple = data.createSimple
+    end
+    
+    local function initAfterMain()
+    	Explorer = Apps.Explorer
+    	Properties = Apps.Properties
+    	Notepad = Apps.Notepad
+    	Notebook = Apps.Notebook
+    end
+    
+    local function getPath(obj)
+        if Main and Main.SafeGetInstancePath then
+            return Main.SafeGetInstancePath(obj)
+        end
+        if not obj then return "?" end
+        if obj.Parent == nil then return "Nil parented" end
+        local ok, fullName = pcall(function()
+            return obj:GetFullName()
+        end)
+        return ok and fullName or tostring(obj)
+    end
+    
+    local function main()
+    	local RunService = game:GetService("RunService")
+    	local UserInputService = game:GetService("UserInputService")
+    	
+    	local ModelViewer = {
+    		EnableInputCamera = true,
+    		IsViewing = false,
+    		AutoRefresh = false,
+    		ZoomMultiplier = 2,
+    		AutoRotate = true,
+    		RotationSpeed = 0.01,
+    		RefreshRate = 30 -- hertz
+    	}
+    	
+    	local window, viewportFrame, pathLabel, settingsButton
+    	local model, camera, originalModel
+    	
+    	
+    	ModelViewer.StopViewModel = function(updating)
+    		if updating then
+    			viewportFrame:FindFirstChildOfClass("Model"):Destroy()
+    		else
+    			if camera then camera = nil end
+    			if model then model = nil end
+    			viewportFrame:ClearAllChildren()
+    			
+    			ModelViewer.IsViewing = false
+    			window:SetTitle("3D Preview")
+    			pathLabel.Gui.Text = ""
+    		end
+    	end
+    
+    	ModelViewer.ViewModel = function(item, updating)
+    		if not item then return end
+    		ModelViewer.StopViewModel(updating)
+    		
+    		if item ~= workspace and not item:IsA("Terrain") then
+    			-- why Model == workspace
+    			-- wtf?
+    			
+    			if item:IsA("BasePart") and not item:IsA("Model") then			
+    				model = Instance.new("Model")
+    				model.Parent = viewportFrame
+    
+    				local clone = item:Clone()
+    				clone.Parent = model
+    				model.PrimaryPart = clone
+    				model:SetPrimaryPartCFrame(CFrame.new(0, 0, 0))
+    			elseif item:IsA("Model") then
+    				item.Archivable = true
+    
+    			--[[if not item.PrimaryPart then
+    				pathLabel.Gui.Text = "Failed to view model: No PrimaryPart is found."
+    				return
+    			end]]
+    				if #item:GetChildren() == 0 then return end
+    				
+    				model = item:Clone()
+    				model.Parent = viewportFrame
+    
+    				-- fallback
+    				if not model.PrimaryPart then
+    					local found = false
+    					for _, child in model:GetDescendants() do
+    						if child:IsA("BasePart") then
+    							model.PrimaryPart = child
+    							model:SetPrimaryPartCFrame(CFrame.new(0, 0, 0))
+    							found = true
+    							break
+    						end
+    					end
+    					if not found then
+    						model:Destroy()
+    						model = nil
+    						return
+    					end
+    				end
+    			else
+    				return
+    			end
+    		end
+    		
+    		originalModel = item
+    		
+    		if ModelViewer.AutoRefresh and not updating then
+    			task.spawn(function()
+    				while model and ModelViewer.AutoRefresh do
+    					
+    					ModelViewer.ViewModel(originalModel, true)
+    					task.wait(1 / ModelViewer.RefreshRate)
+    				end
+    			end)
+    		end
+    		
+    		if not updating then
+    			camera = Instance.new("Camera")
+    			viewportFrame.CurrentCamera = camera
+    
+    			camera.Parent = viewportFrame
+    			camera.FieldOfView = 60
+    			
+    			window:SetTitle(item.Name.." - 3D Preview")
+    			pathLabel.Gui.Text = "path: " .. getPath(originalModel)
+    			window:Show()
+    			ModelViewer.IsViewing = true
+    		end
+    	end
+    
+    	ModelViewer.Init = function()
+    		window = Lib.Window.new()
+    		window:SetTitle("3D Preview")
+    		window:Resize(350,200)
+    		ModelViewer.Window =  window
+    		
+    		viewportFrame = Instance.new("ViewportFrame")
+    		viewportFrame.Parent = window.GuiElems.Content
+    		viewportFrame.BackgroundTransparency = 1
+    		viewportFrame.Size = UDim2.new(1,0,1,0)
+    		
+    		pathLabel = Lib.Label.new()
+    		pathLabel.Gui.Parent = window.GuiElems.Content
+    		pathLabel.Gui.AnchorPoint = Vector2.new(0,1)
+    		pathLabel.Gui.Text = ""
+    		pathLabel.Gui.TextSize = 12
+    		pathLabel.Gui.TextTransparency = 0.8
+    		pathLabel.Gui.Position = UDim2.new(0,1,1,0)
+    		pathLabel.Gui.Size = UDim2.new(1,-1,0,15)
+    		pathLabel.Gui.BackgroundTransparency = 1
+    		
+    		settingsButton = Instance.new("ImageButton",window.GuiElems.Content)
+    		settingsButton.AnchorPoint = Vector2.new(1,0)
+    		settingsButton.BackgroundTransparency = 1
+    		settingsButton.Size = UDim2.new(0,15,0,15)
+    		settingsButton.Position = UDim2.new(1,-3,0,3)
+    		settingsButton.Image = "rbxassetid://6578871732"
+    		settingsButton.ImageTransparency = 0.5
+    		-- mobile input check
+    		if UserInputService:GetLastInputType() == Enum.UserInputType.Touch then
+    			settingsButton.Visible = true
+    		else
+    			settingsButton.Visible = false
+    		end
+    
+    		local rotationX, rotationY = -15, 0
+    		local distance = 10
+    		local dragging = false
+    		local hovering = false
+    		local lastpos = Vector2.zero
+    
+    		viewportFrame.InputBegan:Connect(function(input)
+    			if not ModelViewer.EnableInputCamera then return end
+    			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    				dragging = true
+    				lastpos = input.Position
+    			elseif input.KeyCode == Enum.KeyCode.LeftShift then
+    				ModelViewer.ZoomMultiplier = 10
+    			end
+    		end)
+    		
+    
+    		viewportFrame.MouseEnter:Connect(function()
+    			hovering = true
+    		end)
+    		viewportFrame.MouseLeave:Connect(function()
+    			hovering = false
+    		end)
+    
+    		viewportFrame.InputEnded:Connect(function(input)
+    			if not ModelViewer.EnableInputCamera then return end
+    			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    				dragging = false
+    			elseif input.KeyCode == Enum.KeyCode.LeftShift then
+    				ModelViewer.ZoomMultiplier = 2
+    			end
+    		end)
+    
+    		viewportFrame.InputChanged:Connect(function(input)
+    			if not ModelViewer.EnableInputCamera then return end
+    			if dragging and input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+    				local delta = input.Position - lastpos
+    				lastpos = input.Position
+    
+    				rotationY -= delta.X * 0.01
+    				rotationX -= delta.Y * 0.01
+    				rotationX = math.clamp(rotationX, -math.pi/2 + 0.1, math.pi/2 - 0.1)
+    			end
+    
+    			if input.UserInputType == Enum.UserInputType.MouseWheel and hovering then
+    				distance = math.clamp(distance - (input.Position.Z * ModelViewer.ZoomMultiplier), 0.1, math.huge)
+    			end
+    		end)
+    
+    		RunService.RenderStepped:Connect(function(dt)
+    			if camera and model then
+    				if not dragging and ModelViewer.AutoRotate then
+    					rotationY += ModelViewer.RotationSpeed * dt * 60
+    				end
+    				
+    				local center = model.PrimaryPart.Position
+    				local offset = CFrame.new(0, 0, distance)
+    				local rotation = CFrame.Angles(0, rotationY, 0) * CFrame.Angles(rotationX, 0, 0)
+    
+    				local camCF = CFrame.new(center) * rotation * offset
+    
+    				camera.CFrame = CFrame.lookAt(camCF.Position, center)
+    				
+    			end
+    		end)
+    		
+    		-- context stuffs
+    		local context = Lib.ContextMenu.new()
+    		
+    		local absoluteSize = context.Gui.AbsoluteSize
+    		context.MaxHeight = (absoluteSize.Y <= 600 and (absoluteSize.Y - 40)) or nil
+    
+    		-- Registers
+    		context:Register("STOP",{Name = "Stop Viewing", OnClick = function()
+    			ModelViewer.StopViewModel()
+    		end})
+    		context:Register("EXIT",{Name = "Exit", OnClick = function()
+    			ModelViewer.StopViewModel()
+    			context:Hide()
+    			window:Hide()
+    		end})
+    		context:Register("COPY_PATH",{Name = "Copy Path", OnClick = function()
+    			if model then
+    				env.setclipboard(getPath(originalModel))
+    			end
+    		end})
+    		context:Register("REFRESH",{Name = "Refresh", OnClick = function()
+    			if originalModel then
+    				ModelViewer.ViewModel(originalModel)
+    			end
+    		end})
+    		context:Register("ENABLE_AUTO_REFRESH",{Name = "Enable Auto Refresh", OnClick = function()
+    			if originalModel then
+    				ModelViewer.AutoRefresh = true
+    				ModelViewer.ViewModel(originalModel)
+    			end
+    		end})
+    		context:Register("DISABLE_AUTO_REFRESH",{Name = "Disable Auto Refresh", OnClick = function()
+    			if originalModel then
+    				ModelViewer.AutoRefresh = false
+    				ModelViewer.ViewModel(originalModel)
+    			end
+    		end})
+    		context:Register("SAVE_INST",{Name = "Save to File", OnClick = function()
+    			if model then
+    				Lib.SaveAsPrompt("Place_"..game.PlaceId.."_"..originalModel.Name.."_"..os.time(), function(filename)
+    					window:SetTitle(originalModel.Name.." - Model Viewer - Saving")	
+    					
+    					local success, result = pcall(env.saveinstance,
+    					originalModel, filename,
+    						{
+    							Decompile = true,
+    							RemovePlayerCharacters = false
+    						}
+    					)
+    					
+    					if success then
+    						window:SetTitle(originalModel.Name.." - Model Viewer - Saved")
+    						context:Hide()
+    						task.wait(5)
+    						if model then
+    							window:SetTitle(originalModel.Name.." - Model Viewer")
+    						end
+    					else
+    						window:SetTitle(originalModel.Name.." - Model Viewer - Error")
+    						warn("Error while saving model: "..result)
+    						context:Hide()
+    						task.wait(5)
+    						if model then
+    							window:SetTitle(originalModel.Name.." - Model Viewer")
+    						end
+    					end
+    				end)
+    			end
+    		end})
+    		
+    		context:Register("ENABLE_AUTO_ROTATE",{Name = "Enable Auto Rotate", OnClick = function()
+    			ModelViewer.AutoRotate = true
+    			
+    		end})
+    		context:Register("DISABLE_AUTO_ROTATE",{Name = "Disable Auto Rotate", OnClick = function()
+    			ModelViewer.AutoRotate = false
+    		end})
+    		context:Register("LOCK_CAM",{Name = "Lock Camera", OnClick = function()
+    			ModelViewer.EnableInputCamera = false
+    		end})
+    		context:Register("UNLOCK_CAM",{Name = "Unlock Camera", OnClick = function()
+    			ModelViewer.EnableInputCamera = true
+    		end})
+    		
+    		context:Register("ZOOM_IN",{Name = "Zoom In", OnClick = function()
+    			distance = math.clamp(distance - (ModelViewer.ZoomMultiplier * 2), 2, math.huge)
+    		end})
+    		
+    		context:Register("ZOOM_OUT",{Name = "Zoom Out", OnClick = function()
+    			distance = math.clamp(distance + (ModelViewer.ZoomMultiplier * 2), 2, math.huge)
+    		end})
+    		
+    		local function ShowContext()
+    			context:Clear()
+    
+    			context:AddRegistered("STOP", not ModelViewer.IsViewing)	
+    			context:AddRegistered("REFRESH", not ModelViewer.IsViewing)
+    			context:AddRegistered("COPY_PATH", not ModelViewer.IsViewing)
+    			context:AddRegistered("SAVE_INST", not ModelViewer.IsViewing)
+    			context:AddDivider()
+    			
+    			if env.isonmobile then
+    				context:AddRegistered("ZOOM_IN")
+    				context:AddRegistered("ZOOM_OUT")
+    				context:AddDivider()
+    			end
+    
+    			if ModelViewer.AutoRotate then
+    				context:AddRegistered("DISABLE_AUTO_ROTATE")
+    			else
+    				context:AddRegistered("ENABLE_AUTO_ROTATE")
+    			end
+    			if ModelViewer.AutoRefresh then
+    				context:AddRegistered("DISABLE_AUTO_REFRESH")
+    			else
+    				context:AddRegistered("ENABLE_AUTO_REFRESH")
+    			end
+    			if ModelViewer.EnableInputCamera then
+    				context:AddRegistered("LOCK_CAM")
+    			else
+    				context:AddRegistered("UNLOCK_CAM")
+    			end
+    
+    			context:AddDivider()
+    
+    			context:AddRegistered("EXIT")
+    
+    			context:Show()
+    		end
+    		
+    		local function HideContext()
+    			context:Hide()
+    		end
+    		
+    		viewportFrame.InputBegan:Connect(function(input)
+    			if input.UserInputType == Enum.UserInputType.MouseButton2 then
+    				ShowContext()
+    			elseif input.UserInputType == Enum.UserInputType.MouseButton1 and Lib.CheckMouseInGui(context.Gui) then
+    				HideContext()
+    			end
+    		end)
+    		settingsButton.MouseButton1Click:Connect(function()
+    			ShowContext()
+    		end)
+    	end
+    
+    	return ModelViewer
+    end
+    
+    if gethsfuncs then
+    	_G.moduleData = {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    else
+    	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    end
+end,
+["ImageViewer"] = function()
+    --!strict
+    --[[
+    	Image Viewer App Module
+    	Previews image-like asset properties from selected instances.
+    ]]
+    local Main,Lib,Apps,Settings
+    local Explorer, ImageViewer, Notebook
+    local API,RMD,env,service,plr,create,createSimple
+    
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    	API, RMD, env, service, plr = data.API, data.RMD, data.env, data.service, data.plr
+    	create, createSimple = data.create, data.createSimple
+    end
+    
+    local function initAfterMain()
+    	Explorer = Apps.Explorer
+    	ImageViewer = Apps.ImageViewer
+    	Notebook = Apps.Notebook
+    end
+    
+    local function main()
+    	local ImageViewer = {}
+    	local window, preview, titleLabel, detailLabel, listFrame
+    	local currentItems = {}
+    	local selectedItem = nil
+    
+    	local imagePropsByClass = {
+    		Decal = {"Texture"},
+    		Texture = {"Texture"},
+    		ImageLabel = {"Image"},
+    		ImageButton = {"Image", "HoverImage", "PressedImage"},
+    		ImageHandleAdornment = {"Image"},
+    		ParticleEmitter = {"Texture"},
+    		Trail = {"Texture"},
+    		Beam = {"Texture"},
+    		MeshPart = {"TextureID"},
+    		SpecialMesh = {"TextureId"},
+    		SurfaceAppearance = {"ColorMap", "NormalMap", "MetalnessMap", "RoughnessMap"},
+    		Sky = {"SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp"},
+    		Shirt = {"ShirtTemplate"},
+    		Pants = {"PantsTemplate"},
+    		ShirtGraphic = {"Graphic"},
+    	}
+    
+    	local function getPath(obj)
+            if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(obj) end
+    		local ok, path = pcall(function()
+    			if Explorer and Explorer.GetInstancePath then return Explorer.GetInstancePath(obj) end
+    			return obj:GetFullName()
+    		end)
+    		return ok and tostring(path) or tostring(obj)
+    	end
+    
+    	local function normalizeAsset(value)
+    		value = tostring(value or "")
+    		if value == "" then return "" end
+    		local id = value:match("rbxassetid://(%d+)") or value:match("[?&]id=(%d+)") or value:match("asset/%?id=(%d+)") or value:match("(%d+)")
+    		if id and value:find("rbxassetid://", 1, true) == nil then
+    			return "rbxassetid://" .. id
+    		end
+    		return value
+    	end
+    
+    	local function clearRows()
+    		if not listFrame then return end
+    		for _, child in pairs(listFrame:GetChildren()) do
+    			if child:IsA("GuiButton") or child:IsA("TextLabel") then child:Destroy() end
+    		end
+    	end
+    
+    	local function setPreview(item)
+    		selectedItem = item
+    		if not preview or not titleLabel or not detailLabel then return end
+    		if not item then
+    			preview.Image = ""
+    			titleLabel.Text = "No image selected"
+    			detailLabel.Text = "Right click an image object or a folder/model containing image assets."
+    			return
+    		end
+    		preview.Image = item.Asset
+    		titleLabel.Text = item.Object.Name .. "." .. item.Property
+    		detailLabel.Text = item.Asset .. " | " .. item.Path
+    	end
+    
+    	local function addRow(item)
+    		local row = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Main2, BorderColor3 = Settings.Theme.Outline1,
+    			BorderSizePixel = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,42),
+    			Text = "", Parent = listFrame
+    		})
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,2),
+    			Size = UDim2.new(1,-16,0,18), Text = item.Object.Name .. " [" .. item.Object.ClassName .. "] ." .. item.Property,
+    			TextColor3 = Settings.Theme.Text, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd,
+    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
+    		})
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,21),
+    			Size = UDim2.new(1,-16,0,18), Text = item.Asset,
+    			TextColor3 = Settings.Theme.PlaceholderText, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd,
+    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
+    		})
+    		Lib.ButtonAnim(row,{Mode=2, StartColor=Settings.Theme.Main2, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline1})
+    		row.MouseButton1Click:Connect(function()
+    			setPreview(item)
+    		end)
+    	end
+    
+    	local function collectFrom(obj, results, limit)
+    		local props = imagePropsByClass[obj.ClassName]
+    		if props then
+    			for _, prop in ipairs(props) do
+    				local ok, value = pcall(function() return obj[prop] end)
+    				local asset = ok and normalizeAsset(value) or ""
+    				if asset ~= "" then
+    					results[#results + 1] = {Object = obj, Property = prop, Asset = asset, Path = getPath(obj)}
+    					if #results >= limit then return end
+    				end
+    			end
+    		end
+    	end
+    
+    	local function collectImages(root)
+    		local results = {}
+    		local limit = 160
+    		collectFrom(root, results, limit)
+    		if #results >= limit then return results end
+    		local descendants = nil
+    		if root == game and env.RefreshClientSurface then
+    			descendants = env.RefreshClientSurface(false, false).AllInstances
+    		else
+    			local ok, list = pcall(root.GetDescendants, root)
+    			descendants = ok and list or {}
+    		end
+    		local count = 0
+    		for _, obj in pairs(descendants) do
+    			count += 1
+    			collectFrom(obj, results, limit)
+    			if #results >= limit then break end
+    			if count % 200 == 0 then task.wait() end
+    		end
+    		return results
+    	end
+    
+    	ImageViewer.ShowForObject = function(obj)
+    		if typeof(obj) ~= "Instance" then return end
+    		currentItems = collectImages(obj)
+    		clearRows()
+    		window:SetTitle("Image Viewer - " .. obj.Name)
+    		for _, item in ipairs(currentItems) do addRow(item) end
+    		if #currentItems == 0 then
+    			local label = createSimple("TextLabel",{
+    				BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,24),
+    				Text = "No image assets found in selected object.", TextColor3 = Settings.Theme.PlaceholderText,
+    				TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = listFrame
+    			})
+    			local pad = Instance.new("UIPadding")
+    			pad.PaddingLeft = UDim.new(0,6)
+    			pad.Parent = label
+    			setPreview(nil)
+    		else
+    			setPreview(currentItems[1])
+    		end
+    		window:Show()
+    	end
+    
+    	local function makeButton(parent, text, pos, size, callback)
+    		local button = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Button, BorderColor3 = Settings.Theme.Outline2,
+    			Font = Enum.Font.SourceSans, Position = pos, Size = size, Text = text,
+    			TextColor3 = Settings.Theme.Text, TextSize = 14, Parent = parent
+    		})
+    		button.MouseButton1Click:Connect(callback)
+    		Lib.ButtonAnim(button,{Mode=2, StartColor=Settings.Theme.Button, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline2})
+    	end
+    
+    	ImageViewer.Init = function()
+    		window = Lib.Window.new()
+    		window:SetTitle("Image Viewer")
+    		window:Resize(620,430)
+    		ImageViewer.Window = window
+    		local content = window.GuiElems.Content
+    		local previewPane = createSimple("Frame",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Position=UDim2.new(0,0,0,0), Size=UDim2.new(0.48,0,1,0), Parent=content})
+    		preview = createSimple("ImageLabel",{BackgroundColor3=Settings.Theme.TextBox, BorderColor3=Settings.Theme.Outline1, Position=UDim2.new(0,8,0,8), Size=UDim2.new(1,-16,1,-88), ScaleType=Enum.ScaleType.Fit, Image="", Parent=previewPane})
+    		titleLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Position=UDim2.new(0,8,1,-76), Size=UDim2.new(1,-16,0,22), Text="No image selected", TextColor3=Settings.Theme.Text, TextSize=14, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=previewPane})
+    		detailLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,1,-54), Size=UDim2.new(1,-16,0,22), Text="", TextColor3=Settings.Theme.PlaceholderText, TextSize=13, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=previewPane})
+    		makeButton(previewPane, "Copy Asset", UDim2.new(0,8,1,-28), UDim2.new(0,96,0,22), function()
+    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Asset) end
+    		end)
+    		makeButton(previewPane, "Copy Path", UDim2.new(0,110,1,-28), UDim2.new(0,86,0,22), function()
+    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Path) end
+    		end)
+    		listFrame = createSimple("ScrollingFrame",{Active=true, AutomaticCanvasSize=Enum.AutomaticSize.Y, BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, BottomImage="", CanvasSize=UDim2.new(0,0,0,0), Position=UDim2.new(0.48,1,0,0), ScrollBarImageColor3=Color3.fromRGB(70,70,70), ScrollBarThickness=10, Size=UDim2.new(0.52,-1,1,0), TopImage="", Parent=content})
+    		local layout = Instance.new("UIListLayout")
+    		layout.Padding = UDim.new(0,4)
+    		layout.SortOrder = Enum.SortOrder.LayoutOrder
+    		layout.Parent = listFrame
+    		local pad = Instance.new("UIPadding")
+    		pad.PaddingBottom, pad.PaddingLeft, pad.PaddingRight, pad.PaddingTop = UDim.new(0,6), UDim.new(0,4), UDim.new(0,4), UDim.new(0,4)
+    		pad.Parent = listFrame
+    	end
+    	return ImageViewer
+    end
+    
+    if gethsfuncs then
+    	_G.moduleData = {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    else
+    	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    end
+end,
+["SoundViewer"] = function()
+    --!strict
+    --[[
+    	Sound Viewer App Module
+    	Previews sound assets from selected instances.
+    ]]
+    local Main,Lib,Apps,Settings
+    local Explorer, SoundViewer
+    local API,RMD,env,service,plr,create,createSimple
+    
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    	API, RMD, env, service, plr = data.API, data.RMD, data.env, data.service, data.plr
+    	create, createSimple = data.create, data.createSimple
+    end
+    
+    local function initAfterMain()
+    	Explorer = Apps.Explorer
+    	SoundViewer = Apps.SoundViewer
+    end
+    
+    local function getPath(obj)
+    	if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(obj) end
+    	local ok, path = pcall(function()
+    		if Explorer and Explorer.GetInstancePath then return Explorer.GetInstancePath(obj) end
+    		return obj:GetFullName()
+    	end)
+    	return ok and tostring(path) or tostring(obj)
+    end
+    
+    local function normalizeAsset(value)
+    	value = tostring(value or "")
+    	if value == "" then return "" end
+    	local id = value:match("rbxassetid://(%d+)") or value:match("[?&]id=(%d+)") or value:match("asset/%?id=(%d+)") or value:match("(%d+)")
+    	if id and value:find("rbxassetid://", 1, true) == nil then
+    		return "rbxassetid://" .. id
+    	end
+    	return value
+    end
+    
+    local function main()
+    	local SoundViewer = {}
+    	local window, playBtn, stopBtn, loopedCb, volInput, pitchInput, timelineBar, timelineProgress, timeLabel
+    	local soundTitle, soundIdLabel, soundPathLabel, listFrame
+    	local currentItems = {}
+    	local selectedItem = nil
+    	local localSound = nil
+    	local isPlaying = false
+    	local updateConnection = nil
+    
+    	local function clearRows()
+    		if not listFrame then return end
+    		for _, child in pairs(listFrame:GetChildren()) do
+    			if child:IsA("GuiButton") or child:IsA("TextLabel") then child:Destroy() end
+    		end
+    	end
+    
+    	local function stopSound()
+    		if localSound then
+    			pcall(function()
+    				localSound:Stop()
+    			end)
+    		end
+    		isPlaying = false
+    		if playBtn then playBtn.Text = "Play" end
+    	end
+    
+    	local function updatePlayback()
+    		if not localSound or not timelineProgress or not timeLabel then return end
+    		local ok, pos, duration, isL, isP = pcall(function()
+    			return localSound.TimePosition, localSound.TimeLength, localSound.Looped, localSound.IsPlaying
+    		end)
+    		if not ok or not pos or not duration then
+    			localSound = nil
+    			return
+    		end
+    		if duration > 0 then
+    			local pct = math.clamp(pos / duration, 0, 1)
+    			timelineProgress.Size = UDim2.new(pct, 0, 1, 0)
+    			timeLabel.Text = string.format("%.1f / %.1f s", pos, duration)
+    		else
+    			timelineProgress.Size = UDim2.new(0, 0, 1, 0)
+    			timeLabel.Text = string.format("%.1f / -- s", pos)
+    		end
+    		-- Check if naturally ended
+    		if not isP and isPlaying and not isL then
+    			stopSound()
+    		end
+    	end
+    
+    	local function startSound()
+    		if not localSound then return end
+    		pcall(function()
+    			localSound:Play()
+    		end)
+    		isPlaying = true
+    		if playBtn then playBtn.Text = "Pause" end
+    	end
+    
+    	local function togglePlay()
+    		if not localSound then return end
+    		if isPlaying then
+    			pcall(function()
+    				localSound:Pause()
+    			end)
+    			isPlaying = false
+    			if playBtn then playBtn.Text = "Resume" end
+    		else
+    			startSound()
+    		end
+    	end
+    
+    	local function setPreview(item)
+    		stopSound()
+    		if localSound then
+    			pcall(function() localSound:Destroy() end)
+    			localSound = nil
+    		end
+    		selectedItem = item
+    
+    		if not soundTitle or not soundIdLabel or not soundPathLabel then return end
+    
+    		if not item then
+    			soundTitle.Text = "No sound selected"
+    			soundIdLabel.Text = "Select a Sound object to preview."
+    			soundPathLabel.Text = ""
+    			if timelineProgress then timelineProgress.Size = UDim2.new(0,0,1,0) end
+    			if timeLabel then timeLabel.Text = "0.0 / 0.0 s" end
+    			return
+    		end
+    
+    		soundTitle.Text = item.Object.Name
+    		soundIdLabel.Text = item.Asset
+    		soundPathLabel.Text = "path: " .. item.Path
+    
+    		-- Create local sound clone in SoundService
+    		local ok, clone = pcall(function()
+    			local s = Instance.new("Sound")
+    			s.SoundId = item.Asset
+    			s.Volume = tonumber(volInput and volInput.Text) or item.Object.Volume or 0.5
+    			s.PlaybackSpeed = tonumber(pitchInput and pitchInput.Text) or item.Object.PlaybackSpeed or 1
+    			s.Looped = loopedCb and loopedCb.Toggled or item.Object.Looped or false
+    			s.Parent = game:GetService("SoundService")
+    			return s
+    		end)
+    
+    		if ok and clone then
+    			localSound = clone
+    			updatePlayback()
+    		else
+    			soundIdLabel.Text = "Failed to load sound: " .. tostring(clone)
+    		end
+    	end
+    
+    	local function addRow(item)
+    		local row = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Main2, BorderColor3 = Settings.Theme.Outline1,
+    			BorderSizePixel = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,42),
+    			Text = "", Parent = listFrame
+    		})
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,2),
+    			Size = UDim2.new(1,-16,0,18), Text = item.Object.Name .. " [" .. item.Object.ClassName .. "]",
+    			TextColor3 = Settings.Theme.Text, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd,
+    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
+    		})
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,21),
+    			Size = UDim2.new(1,-16,0,18), Text = item.Asset,
+    			TextColor3 = Settings.Theme.PlaceholderText, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd,
+    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
+    		})
+    		Lib.ButtonAnim(row,{Mode=2, StartColor=Settings.Theme.Main2, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline1})
+    		row.MouseButton1Click:Connect(function()
+    			setPreview(item)
+    		end)
+    	end
+    
+    	local function collectFrom(obj, results, limit)
+    		if obj:IsA("Sound") then
+    			local asset = normalizeAsset(obj.SoundId)
+    			if asset ~= "" then
+    				results[#results + 1] = {Object = obj, Asset = asset, Path = getPath(obj)}
+    			end
+    		end
+    	end
+    
+    	local function collectSounds(root)
+    		local results = {}
+    		local limit = 160
+    		collectFrom(root, results, limit)
+    		if #results >= limit then return results end
+    		local descendants = nil
+    		local ok, list = pcall(function()
+    			if root == game then
+    				local list = {}
+    				for _, service in ipairs({workspace, game:GetService("ReplicatedStorage"), game:GetService("StarterPack")}) do
+    					local ok2, sList = pcall(service.GetDescendants, service)
+    					if ok2 then
+    						for _, d in ipairs(sList) do
+    							table.insert(list, d)
+    						end
+    					end
+    				end
+    				return list
+    			else
+    				return root:GetDescendants()
+    			end
+    		end)
+    		descendants = ok and list or {}
+    		local count = 0
+    		for _, obj in pairs(descendants) do
+    			count += 1
+    			collectFrom(obj, results, limit)
+    			if #results >= limit then break end
+    			if count % 200 == 0 then task.wait() end
+    		end
+    		return results
+    	end
+    
+    	SoundViewer.ShowForObject = function(obj)
+    		if typeof(obj) ~= "Instance" then return end
+    		currentItems = collectSounds(obj)
+    		clearRows()
+    		window:SetTitle("Sound Viewer - " .. obj.Name)
+    		for _, item in ipairs(currentItems) do addRow(item) end
+    		if #currentItems == 0 then
+    			local label = createSimple("TextLabel",{
+    				BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,24),
+    				Text = "No sound assets found in selected object.", TextColor3 = Settings.Theme.PlaceholderText,
+    				TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = listFrame
+    			})
+    			local pad = Instance.new("UIPadding")
+    			pad.PaddingLeft = UDim.new(0,6)
+    			pad.Parent = label
+    			setPreview(nil)
+    		else
+    			setPreview(currentItems[1])
+    		end
+    		window:Show()
+    	end
+    
+    	local function makeButton(parent, text, pos, size, callback)
+    		local button = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Button, BorderColor3 = Settings.Theme.Outline2,
+    			Font = Enum.Font.SourceSans, Position = pos, Size = size, Text = text,
+    			TextColor3 = Settings.Theme.Text, TextSize = 14, Parent = parent
+    		})
+    		button.MouseButton1Click:Connect(callback)
+    		Lib.ButtonAnim(button,{Mode=2, StartColor=Settings.Theme.Button, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline2})
+    		return button
+    	end
+    
+    	SoundViewer.Init = function()
+    		window = Lib.Window.new()
+    		window:SetTitle("Sound Viewer")
+    		window:Resize(620,380)
+    		SoundViewer.Window = window
+    		local content = window.GuiElems.Content
+    
+    		local previewPane = createSimple("Frame",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Position=UDim2.new(0,0,0,0), Size=UDim2.new(0.48,0,1,0), Parent=content})
+    
+    		soundTitle = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Position=UDim2.new(0,8,0,8), Size=UDim2.new(1,-16,0,22), Text="No sound selected", TextColor3=Settings.Theme.Text, TextSize=15, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=previewPane})
+    		soundIdLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,0,32), Size=UDim2.new(1,-16,0,20), Text="", TextColor3=Settings.Theme.PlaceholderText, TextSize=13, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=previewPane})
+    		soundPathLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,0,54), Size=UDim2.new(1,-16,0,18), Text="", TextColor3=Settings.Theme.PlaceholderText, TextSize=11, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=previewPane})
+    
+    		-- Playback Control UI
+    		-- Clickable Timeline Bar
+    		timelineBar = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.TextBox, BorderColor3 = Settings.Theme.Outline1,
+    			BorderSizePixel = 1, Position = UDim2.new(0,8,0,90), Size = UDim2.new(1,-16,0,14), Text = "", Parent = previewPane
+    		})
+    		timelineProgress = createSimple("Frame",{
+    			BackgroundColor3 = Settings.Theme.Highlight, BorderSizePixel = 0, Size = UDim2.new(0,0,1,0), Parent = timelineBar
+    		})
+    		timeLabel = createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,110), Size = UDim2.new(1,-16,0,18),
+    			Text = "0.0 / 0.0 s", TextColor3 = Settings.Theme.Text, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Right, Parent = previewPane
+    		})
+    
+    		-- Click to Seek Timeline logic
+    		timelineBar.MouseButton1Down:Connect(function()
+    			if not localSound or localSound.TimeLength == 0 then return end
+    			local mouse = plr:GetMouse()
+    			local function seek()
+    				local absPos = timelineBar.AbsolutePosition
+    				local absSize = timelineBar.AbsoluteSize
+    				local pct = math.clamp((mouse.X - absPos.X) / absSize.X, 0, 1)
+    				localSound.TimePosition = pct * localSound.TimeLength
+    				updatePlayback()
+    			end
+    			seek()
+    			-- Allow scrubbing while holding mouse
+    			local moveCon
+    			moveCon = mouse.Move:Connect(seek)
+    			local releaseCon
+    			releaseCon = game:GetService("UserInputService").InputEnded:Connect(function(input)
+    				if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    					moveCon:Disconnect()
+    					releaseCon:Disconnect()
+    				end
+    			end)
+    		end)
+    
+    		playBtn = makeButton(previewPane, "Play", UDim2.new(0,8,0,140), UDim2.new(0,70,0,24), togglePlay)
+    		stopBtn = makeButton(previewPane, "Stop", UDim2.new(0,84,0,140), UDim2.new(0,60,0,24), stopSound)
+    
+    		-- Loop controls
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,160,0,140), Size = UDim2.new(0,40,0,24),
+    			Text = "Loop:", TextColor3 = Settings.Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = previewPane
+    		})
+    		loopedCb = Lib.Checkbox.new(0)
+    		loopedCb.Gui.Position = UDim2.new(0,198,0,144)
+    		loopedCb.Gui.Parent = previewPane
+    		loopedCb.OnInput:Connect(function()
+    			if localSound then
+    				localSound.Looped = loopedCb.Toggled
+    			end
+    		end)
+    
+    		-- Volume
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,180), Size = UDim2.new(0,60,0,24),
+    			Text = "Volume:", TextColor3 = Settings.Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = previewPane
+    		})
+    		volInput = createSimple("TextBox",{
+    			BackgroundColor3 = Settings.Theme.TextBox, BorderColor3 = Settings.Theme.Outline3, Font = Enum.Font.SourceSans,
+    			Position = UDim2.new(0,70,0,180), Size = UDim2.new(0,50,0,24), Text = "0.5", TextColor3 = Settings.Theme.Text, TextSize = 14, Parent = previewPane
+    		})
+    		volInput:GetPropertyChangedSignal("Text"):Connect(function()
+    			local vol = tonumber(volInput.Text)
+    			if vol and localSound then
+    				localSound.Volume = math.clamp(vol, 0, 10)
+    			end
+    		end)
+    
+    		-- Pitch / Speed
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,135,0,180), Size = UDim2.new(0,50,0,24),
+    			Text = "Speed:", TextColor3 = Settings.Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = previewPane
+    		})
+    		pitchInput = createSimple("TextBox",{
+    			BackgroundColor3 = Settings.Theme.TextBox, BorderColor3 = Settings.Theme.Outline3, Font = Enum.Font.SourceSans,
+    			Position = UDim2.new(0,185,0,180), Size = UDim2.new(0,50,0,24), Text = "1.0", TextColor3 = Settings.Theme.Text, TextSize = 14, Parent = previewPane
+    		})
+    		pitchInput:GetPropertyChangedSignal("Text"):Connect(function()
+    			local spd = tonumber(pitchInput.Text)
+    			if spd and localSound then
+    				localSound.PlaybackSpeed = math.clamp(spd, 0, 20)
+    			end
+    		end)
+    
+    		-- Action Buttons at bottom
+    		makeButton(previewPane, "Copy Sound ID", UDim2.new(0,8,1,-32), UDim2.new(0,100,0,24), function()
+    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Asset) end
+    		end)
+    		makeButton(previewPane, "Copy Path", UDim2.new(0,114,1,-32), UDim2.new(0,86,0,24), function()
+    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Path) end
+    		end)
+    
+    		listFrame = createSimple("ScrollingFrame",{Active=true, AutomaticCanvasSize=Enum.AutomaticSize.Y, BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, BottomImage="", CanvasSize=UDim2.new(0,0,0,0), Position=UDim2.new(0.48,1,0,0), ScrollBarImageColor3=Color3.fromRGB(70,70,70), ScrollBarThickness=10, Size=UDim2.new(0.52,-1,1,0), TopImage="", Parent=content})
+    		local layout = Instance.new("UIListLayout")
+    		layout.Padding = UDim.new(0,4)
+    		layout.SortOrder = Enum.SortOrder.LayoutOrder
+    		layout.Parent = listFrame
+    		local listPad = Instance.new("UIPadding")
+    		listPad.PaddingBottom, listPad.PaddingLeft, listPad.PaddingRight, listPad.PaddingTop = UDim.new(0,6), UDim.new(0,4), UDim.new(0,4), UDim.new(0,4)
+    		listPad.Parent = listFrame
+    
+    		local function connectPlaybackLoop()
+    			if not updateConnection then
+    				updateConnection = game:GetService("RunService").RenderStepped:Connect(updatePlayback)
+    			end
+    		end
+    
+    		local function disconnectPlaybackLoop()
+    			if updateConnection then
+    				updateConnection:Disconnect()
+    				updateConnection = nil
+    			end
+    		end
+    
+    		window.OnActivate:Connect(connectPlaybackLoop)
+    		window.OnDeactivate:Connect(function()
+    			stopSound()
+    			disconnectPlaybackLoop()
+    		end)
+    	end
+    
+    	SoundViewer.CleanUp = function()
+    		stopSound()
+    		if updateConnection then
+    			updateConnection:Disconnect()
+    			updateConnection = nil
+    		end
+    		if localSound then
+    			pcall(function() localSound:Destroy() end)
+    			localSound = nil
+    		end
+    	end
+    
+    	return SoundViewer
+    end
+    
+    if gethsfuncs then
+    	_G.moduleData = {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    else
+    	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    end
+end,
+["AnimationViewer"] = function()
+    --!strict
+    --[[
+    	Animation Viewer App Module
+    	Previews animation assets inside a ViewportFrame using a WorldModel and Dummy rig.
+    ]]
+    local Main,Lib,Apps,Settings
+    local Explorer, AnimationViewer
+    local API,RMD,env,service,plr,create,createSimple
+    
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    	API, RMD, env, service, plr = data.API, data.RMD, data.env, data.service, data.plr
+    	create, createSimple = data.create, data.createSimple
+    end
+    
+    local function initAfterMain()
+    	Explorer = Apps.Explorer
+    	AnimationViewer = Apps.AnimationViewer
+    end
+    
+    local function getPath(obj)
+    	if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(obj) end
+    	local ok, path = pcall(function()
+    		if Explorer and Explorer.GetInstancePath then return Explorer.GetInstancePath(obj) end
+    		return obj:GetFullName()
+    	end)
+    	return ok and tostring(path) or tostring(obj)
+    end
+    
+    local function normalizeAsset(value)
+    	value = tostring(value or "")
+    	if value == "" then return "" end
+    	local id = value:match("rbxassetid://(%d+)") or value:match("[?&]id=(%d+)") or value:match("asset/%?id=(%d+)") or value:match("(%d+)")
+    	if id and value:find("rbxassetid://", 1, true) == nil then
+    		return "rbxassetid://" .. id
+    	end
+    	return value
+    end
+    
+    local function main()
+    	local RunService = game:GetService("RunService")
+    	local UserInputService = game:GetService("UserInputService")
+    
+    	local AnimationViewer = {
+    		EnableInputCamera = true,
+    		IsViewing = false,
+    		ZoomMultiplier = 2,
+    		AutoRotate = false,
+    		RotationSpeed = 0.01,
+    	}
+    
+    	local window, viewportFrame, worldModel, playBtn, loopedCb, speedInput, timelineBar, timelineProgress, timeLabel, charModeBtn
+    	local animTitle, animIdLabel, animPathLabel, listFrame
+    	local currentItems = {}
+    	local selectedItem = nil
+    	local dummyModel = nil
+    	local activeTrack = nil
+    	local animatorInstance = nil
+    	local activeAnimMode = "Grey" -- "Grey" or "Player"
+    	local camera = nil
+    	local isPlaying = false
+    	local updateConnection = nil
+    	local cameraConnection = nil
+    
+    	-- Camera variables
+    	local rotationX, rotationY = -10, 0
+    	local distance = 9
+    	local dragging = false
+    	local hovering = false
+    	local lastpos = Vector2.zero
+    
+    	local function clearRows()
+    		if not listFrame then return end
+    		for _, child in pairs(listFrame:GetChildren()) do
+    			if child:IsA("GuiButton") or child:IsA("TextLabel") then child:Destroy() end
+    		end
+    	end
+    
+    	local function createGreyDummy()
+    		if not plr.Character then return nil end
+    		plr.Character.Archivable = true
+    		local charClone = plr.Character:Clone()
+    		if not charClone then return nil end
+    
+    		-- Remove accessories, clothes, face, packages styling and make it plain grey
+    		for _, child in ipairs(charClone:GetDescendants()) do
+    			if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("BodyColors") or child:IsA("CharacterMesh") or child:IsA("Decal") then
+    				child:Destroy()
+    			elseif child:IsA("BasePart") then
+    				child.Color = Color3.fromRGB(160, 160, 160)
+    				child.Material = Enum.Material.SmoothPlastic
+    				child.Transparency = 0
+    			end
+    		end
+    
+    		local humanoid = charClone:FindFirstChildOfClass("Humanoid")
+    		if humanoid then
+    			humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    		end
+    
+    		return charClone
+    	end
+    
+    	local function createPlayerDummy()
+    		if not plr.Character then return nil end
+    		plr.Character.Archivable = true
+    		local charClone = plr.Character:Clone()
+    		local humanoid = charClone and charClone:FindFirstChildOfClass("Humanoid")
+    		if humanoid then
+    			humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    		end
+    		return charClone
+    	end
+    
+    	local function stopAnimation()
+    		if activeTrack then
+    			pcall(function()
+    				activeTrack:Stop()
+    			end)
+    		end
+    		isPlaying = false
+    		if playBtn then playBtn.Text = "Play" end
+    	end
+    
+    	local function updatePlayback()
+    		if not activeTrack or not timelineProgress or not timeLabel then return end
+    		local ok, pos, duration = pcall(function()
+    			return activeTrack.TimePosition, activeTrack.Length
+    		end)
+    		if not ok or not pos or not duration then
+    			activeTrack = nil
+    			return
+    		end
+    		if duration > 0 then
+    			local pct = math.clamp(pos / duration, 0, 1)
+    			timelineProgress.Size = UDim2.new(pct, 0, 1, 0)
+    			timeLabel.Text = string.format("%.1f / %.1f s", pos, duration)
+    		else
+    			timelineProgress.Size = UDim2.new(0, 0, 1, 0)
+    			timeLabel.Text = string.format("%.1f / -- s", pos)
+    		end
+    	end
+    
+    	local function startAnimation()
+    		if not activeTrack then return end
+    		pcall(function()
+    			activeTrack:Play()
+    		end)
+    		isPlaying = true
+    		if playBtn then playBtn.Text = "Pause" end
+    	end
+    
+    	local function togglePlay()
+    		if not activeTrack then return end
+    		if isPlaying then
+    			pcall(function()
+    				activeTrack:AdjustSpeed(0)
+    			end)
+    			isPlaying = false
+    			if playBtn then playBtn.Text = "Resume" end
+    		else
+    			pcall(function()
+    				activeTrack:AdjustSpeed(tonumber(speedInput.Text) or 1)
+    			end)
+    			startAnimation()
+    		end
+    	end
+    
+    	local function loadRigAndTrack()
+    		stopAnimation()
+    		if dummyModel then
+    			dummyModel:Destroy()
+    			dummyModel = nil
+    		end
+    		activeTrack = nil
+    		animatorInstance = nil
+    
+    		if not selectedItem or not worldModel then return end
+    
+    		-- Build character dummy based on mode
+    		if activeAnimMode == "Grey" then
+    			dummyModel = createGreyDummy()
+    		else
+    			dummyModel = createPlayerDummy()
+    		end
+    
+    		if not dummyModel then
+    			animIdLabel.Text = "Failed to load character preview rig"
+    			return
+    		end
+    
+    		dummyModel.Parent = worldModel
+    		
+    		-- Position Dummy at center
+    		local primary = dummyModel.PrimaryPart or dummyModel:FindFirstChild("HumanoidRootPart") or dummyModel:FindFirstChild("Torso")
+    		if primary then
+    			dummyModel:SetPrimaryPartCFrame(CFrame.new(0, 0, 0))
+    		end
+    
+    		-- Setup Animation
+    		local humanoid = dummyModel:FindFirstChildOfClass("Humanoid")
+    		if humanoid then
+    			animatorInstance = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    		end
+    
+    		if animatorInstance then
+    			local ok, track = pcall(function()
+    				local anim = Instance.new("Animation")
+    				anim.AnimationId = selectedItem.Asset
+    				local tr = animatorInstance:LoadAnimation(anim)
+    				tr.Looped = loopedCb and loopedCb.Toggled or false
+    				return tr
+    			end)
+    			if ok and track then
+    				activeTrack = track
+    				startAnimation()
+    			else
+    				animIdLabel.Text = "Failed to load animation track: " .. tostring(track)
+    			end
+    		end
+    	end
+    
+    	local function toggleCharMode()
+    		if activeAnimMode == "Grey" then
+    			activeAnimMode = "Player"
+    			if charModeBtn then charModeBtn.Text = "Mode: Player avatar" end
+    		else
+    			activeAnimMode = "Grey"
+    			if charModeBtn then charModeBtn.Text = "Mode: Grey dummy" end
+    		end
+    		loadRigAndTrack()
+    	end
+    
+    	local function setPreview(item)
+    		selectedItem = item
+    		if not animTitle or not animIdLabel or not animPathLabel then return end
+    
+    		if not item then
+    			animTitle.Text = "No animation selected"
+    			animIdLabel.Text = "Select an Animation object to preview."
+    			animPathLabel.Text = ""
+    			if timelineProgress then timelineProgress.Size = UDim2.new(0,0,1,0) end
+    			if timeLabel then timeLabel.Text = "0.0 / 0.0 s" end
+    			stopAnimation()
+    			if dummyModel then dummyModel:Destroy() dummyModel = nil end
+    			return
+    		end
+    
+    		animTitle.Text = item.Object.Name
+    		animIdLabel.Text = item.Asset
+    		animPathLabel.Text = "path: " .. item.Path
+    
+    		loadRigAndTrack()
+    	end
+    
+    	local function addRow(item)
+    		local row = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Main2, BorderColor3 = Settings.Theme.Outline1,
+    			BorderSizePixel = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,42),
+    			Text = "", Parent = listFrame
+    		})
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,2),
+    			Size = UDim2.new(1,-16,0,18), Text = item.Object.Name .. " [" .. item.Object.ClassName .. "]",
+    			TextColor3 = Settings.Theme.Text, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd,
+    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
+    		})
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,21),
+    			Size = UDim2.new(1,-16,0,18), Text = item.Asset,
+    			TextColor3 = Settings.Theme.PlaceholderText, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd,
+    			TextXAlignment = Enum.TextXAlignment.Left, Parent = row
+    		})
+    		Lib.ButtonAnim(row,{Mode=2, StartColor=Settings.Theme.Main2, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline1})
+    		row.MouseButton1Click:Connect(function()
+    			setPreview(item)
+    		end)
+    	end
+    
+    	local function collectFrom(obj, results, limit)
+    		if obj:IsA("Animation") then
+    			local asset = normalizeAsset(obj.AnimationId)
+    			if asset ~= "" then
+    				results[#results + 1] = {Object = obj, Asset = asset, Path = getPath(obj)}
+    			end
+    		end
+    	end
+    
+    	local function collectAnimations(root)
+    		local results = {}
+    		local limit = 160
+    		collectFrom(root, results, limit)
+    		if #results >= limit then return results end
+    		local descendants = nil
+    		local ok, list = pcall(function()
+    			if root == game then
+    				local list = {}
+    				for _, service in ipairs({workspace, game:GetService("ReplicatedStorage"), game:GetService("StarterPack")}) do
+    					local ok2, sList = pcall(service.GetDescendants, service)
+    					if ok2 then
+    						for _, d in ipairs(sList) do
+    							table.insert(list, d)
+    						end
+    					end
+    				end
+    				return list
+    			else
+    				return root:GetDescendants()
+    			end
+    		end)
+    		descendants = ok and list or {}
+    		local count = 0
+    		for _, obj in pairs(descendants) do
+    			count += 1
+    			collectFrom(obj, results, limit)
+    			if #results >= limit then break end
+    			if count % 200 == 0 then task.wait() end
+    		end
+    		return results
+    	end
+    
+    	AnimationViewer.ShowForObject = function(obj)
+    		if typeof(obj) ~= "Instance" then return end
+    		currentItems = collectAnimations(obj)
+    		clearRows()
+    		window:SetTitle("Animation Viewer - " .. obj.Name)
+    		for _, item in ipairs(currentItems) do addRow(item) end
+    		if #currentItems == 0 then
+    			local label = createSimple("TextLabel",{
+    				BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Size = UDim2.new(1,-8,0,24),
+    				Text = "No animation assets found in selected object.", TextColor3 = Settings.Theme.PlaceholderText,
+    				TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = listFrame
+    			})
+    			local pad = Instance.new("UIPadding")
+    			pad.PaddingLeft = UDim.new(0,6)
+    			pad.Parent = label
+    			setPreview(nil)
+    		else
+    			setPreview(currentItems[1])
+    		end
+    		window:Show()
+    	end
+    
+    	local function makeButton(parent, text, pos, size, callback)
+    		local button = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.Button, BorderColor3 = Settings.Theme.Outline2,
+    			Font = Enum.Font.SourceSans, Position = pos, Size = size, Text = text,
+    			TextColor3 = Settings.Theme.Text, TextSize = 14, Parent = parent
+    		})
+    		button.MouseButton1Click:Connect(callback)
+    		Lib.ButtonAnim(button,{Mode=2, StartColor=Settings.Theme.Button, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline2})
+    		return button
+    	end
+    
+    	AnimationViewer.Init = function()
+    		window = Lib.Window.new()
+    		window:SetTitle("Animation Viewer")
+    		window:Resize(650,430)
+    		AnimationViewer.Window = window
+    		local content = window.GuiElems.Content
+    
+    		-- Viewport Container Left
+    		local viewportPane = createSimple("Frame",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Position=UDim2.new(0,0,0,0), Size=UDim2.new(0.48,0,1,0), Parent=content})
+    
+    		viewportFrame = Instance.new("ViewportFrame")
+    		viewportFrame.BackgroundTransparency = 1
+    		viewportFrame.Position = UDim2.new(0,8,0,8)
+    		viewportFrame.Size = UDim2.new(1,-16,0,220)
+    		viewportFrame.Parent = viewportPane
+    
+    		worldModel = Instance.new("WorldModel")
+    		worldModel.Parent = viewportFrame
+    
+    		camera = Instance.new("Camera")
+    		camera.FieldOfView = 50
+    		camera.Parent = viewportFrame
+    		viewportFrame.CurrentCamera = camera
+    
+    		-- Drag Camera logic
+    		viewportFrame.InputBegan:Connect(function(input)
+    			if not AnimationViewer.EnableInputCamera then return end
+    			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    				dragging = true
+    				lastpos = input.Position
+    			elseif input.KeyCode == Enum.KeyCode.LeftShift then
+    				AnimationViewer.ZoomMultiplier = 10
+    			end
+    		end)
+    		viewportFrame.MouseEnter:Connect(function() hovering = true end)
+    		viewportFrame.MouseLeave:Connect(function() hovering = false end)
+    		viewportFrame.InputEnded:Connect(function(input)
+    			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    				dragging = false
+    			elseif input.KeyCode == Enum.KeyCode.LeftShift then
+    				AnimationViewer.ZoomMultiplier = 2
+    			end
+    		end)
+    		viewportFrame.InputChanged:Connect(function(input)
+    			if dragging and input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+    				local delta = input.Position - lastpos
+    				lastpos = input.Position
+    				rotationY -= delta.X * 0.01
+    				rotationX -= delta.Y * 0.01
+    				rotationX = math.clamp(rotationX, -math.pi/2 + 0.1, math.pi/2 - 0.1)
+    			end
+    			if input.UserInputType == Enum.UserInputType.MouseWheel and hovering then
+    				distance = math.clamp(distance - (input.Position.Z * AnimationViewer.ZoomMultiplier), 2, 40)
+    			end
+    		end)
+    
+    		-- (Camera RenderStepped connection managed dynamically below via window focus)
+    
+    		-- Controls
+    		animTitle = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Position=UDim2.new(0,8,0,234), Size=UDim2.new(1,-16,0,20), Text="No animation selected", TextColor3=Settings.Theme.Text, TextSize=14, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=viewportPane})
+    		animIdLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,0,252), Size=UDim2.new(1,-16,0,18), Text="", TextColor3=Settings.Theme.PlaceholderText, TextSize=12, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=viewportPane})
+    		animPathLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,0,268), Size=UDim2.new(1,-16,0,16), Text="", TextColor3=Settings.Theme.PlaceholderText, TextSize=11, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=viewportPane})
+    
+    		-- Playback Timeline
+    		timelineBar = createSimple("TextButton",{
+    			AutoButtonColor = false, BackgroundColor3 = Settings.Theme.TextBox, BorderColor3 = Settings.Theme.Outline1,
+    			BorderSizePixel = 1, Position = UDim2.new(0,8,0,290), Size = UDim2.new(1,-16,0,12), Text = "", Parent = viewportPane
+    		})
+    		timelineProgress = createSimple("Frame",{
+    			BackgroundColor3 = Settings.Theme.Highlight, BorderSizePixel = 0, Size = UDim2.new(0,0,1,0), Parent = timelineBar
+    		})
+    		timeLabel = createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,305), Size = UDim2.new(1,-16,0,16),
+    			Text = "0.0 / 0.0 s", TextColor3 = Settings.Theme.Text, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Right, Parent = viewportPane
+    		})
+    
+    		-- Click/Seek Timeline logic
+    		timelineBar.MouseButton1Down:Connect(function()
+    			if not activeTrack or activeTrack.Length == 0 then return end
+    			local mouse = plr:GetMouse()
+    			local function seek()
+    				local absPos = timelineBar.AbsolutePosition
+    				local absSize = timelineBar.AbsoluteSize
+    				local pct = math.clamp((mouse.X - absPos.X) / absSize.X, 0, 1)
+    				activeTrack.TimePosition = pct * activeTrack.Length
+    				updatePlayback()
+    			end
+    			seek()
+    			local moveCon
+    			moveCon = mouse.Move:Connect(seek)
+    			local releaseCon
+    			releaseCon = game:GetService("UserInputService").InputEnded:Connect(function(input)
+    				if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    					moveCon:Disconnect()
+    					releaseCon:Disconnect()
+    				end
+    			end)
+    		end)
+    
+    		playBtn = makeButton(viewportPane, "Play", UDim2.new(0,8,0,330), UDim2.new(0,70,0,24), togglePlay)
+    		charModeBtn = makeButton(viewportPane, "Mode: Grey dummy", UDim2.new(0,84,0,330), UDim2.new(0,120,0,24), toggleCharMode)
+    
+    		-- Loop controls
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,212,0,330), Size = UDim2.new(0,40,0,24),
+    			Text = "Loop:", TextColor3 = Settings.Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = viewportPane
+    		})
+    		loopedCb = Lib.Checkbox.new(0)
+    		loopedCb.Gui.Position = UDim2.new(0,246,0,334)
+    		loopedCb.Gui.Parent = viewportPane
+    		loopedCb.OnInput:Connect(function()
+    			if activeTrack then
+    				activeTrack.Looped = loopedCb.Toggled
+    			end
+    		end)
+    
+    		-- Speed
+    		createSimple("TextLabel",{
+    			BackgroundTransparency = 1, Font = Enum.Font.SourceSans, Position = UDim2.new(0,8,0,364), Size = UDim2.new(0,60,0,24),
+    			Text = "Speed:", TextColor3 = Settings.Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Parent = viewportPane
+    		})
+    		speedInput = createSimple("TextBox",{
+    			BackgroundColor3 = Settings.Theme.TextBox, BorderColor3 = Settings.Theme.Outline3, Font = Enum.Font.SourceSans,
+    			Position = UDim2.new(0,60,0,364), Size = UDim2.new(0,40,0,24), Text = "1.0", TextColor3 = Settings.Theme.Text, TextSize = 14, Parent = viewportPane
+    		})
+    		speedInput:GetPropertyChangedSignal("Text"):Connect(function()
+    			local spd = tonumber(speedInput.Text)
+    			if spd and activeTrack then
+    				activeTrack:AdjustSpeed(math.clamp(spd, 0, 20))
+    			end
+    		end)
+    
+    		makeButton(viewportPane, "Copy Animation ID", UDim2.new(0,110,0,364), UDim2.new(0,110,0,24), function()
+    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Asset) end
+    		end)
+    		makeButton(viewportPane, "Copy Path", UDim2.new(0,226,0,364), UDim2.new(0,68,0,24), function()
+    			if selectedItem and env.setclipboard then env.setclipboard(selectedItem.Path) end
+    		end)
+    
+    		-- Right side list
+    		listFrame = createSimple("ScrollingFrame",{Active=true, AutomaticCanvasSize=Enum.AutomaticSize.Y, BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, BottomImage="", CanvasSize=UDim2.new(0,0,0,0), Position=UDim2.new(0.48,1,0,0), ScrollBarImageColor3=Color3.fromRGB(70,70,70), ScrollBarThickness=10, Size=UDim2.new(0.52,-1,1,0), TopImage="", Parent=content})
+    		local layout = Instance.new("UIListLayout")
+    		layout.Padding = UDim.new(0,4)
+    		layout.SortOrder = Enum.SortOrder.LayoutOrder
+    		layout.Parent = listFrame
+    		local listPad = Instance.new("UIPadding")
+    		listPad.PaddingBottom, listPad.PaddingLeft, listPad.PaddingRight, listPad.PaddingTop = UDim.new(0,6), UDim.new(0,4), UDim.new(0,4), UDim.new(0,4)
+    		listPad.Parent = listFrame
+    
+    		local function connectRenderLoops()
+    			if not updateConnection then
+    				updateConnection = RunService.RenderStepped:Connect(updatePlayback)
+    			end
+    			if not cameraConnection then
+    				cameraConnection = RunService.RenderStepped:Connect(function(dt)
+    					if camera and dummyModel and dummyModel.Parent then
+    						local ok, primary = pcall(function()
+    							return dummyModel.PrimaryPart or dummyModel:FindFirstChild("HumanoidRootPart") or dummyModel:FindFirstChild("Torso")
+    						end)
+    						if ok and primary then
+    							local center = primary.Position
+    							local offset = CFrame.new(0, 1.5, distance) -- offset camera height slightly
+    							local rotation = CFrame.Angles(0, rotationY, 0) * CFrame.Angles(rotationX, 0, 0)
+    							local camCF = CFrame.new(center) * rotation * offset
+    							camera.CFrame = CFrame.lookAt(camCF.Position, center + Vector3.new(0, 0.5, 0))
+    						end
+    					end
+    				end)
+    			end
+    		end
+    
+    		local function disconnectRenderLoops()
+    			if updateConnection then
+    				updateConnection:Disconnect()
+    				updateConnection = nil
+    			end
+    			if cameraConnection then
+    				cameraConnection:Disconnect()
+    				cameraConnection = nil
+    			end
+    		end
+    
+    		window.OnActivate:Connect(connectRenderLoops)
+    		window.OnDeactivate:Connect(function()
+    			stopAnimation()
+    			disconnectRenderLoops()
+    		end)
+    
+    	end
+    
+    	AnimationViewer.CleanUp = function()
+    		stopAnimation()
+    		if updateConnection then
+    			updateConnection:Disconnect()
+    			updateConnection = nil
+    		end
+    		if dummyModel then
+    			pcall(function() dummyModel:Destroy() end)
+    			dummyModel = nil
+    		end
+    	end
+    
+    	return AnimationViewer
     end
     
     if gethsfuncs then
@@ -23545,7 +24548,7 @@ end,
 local isFsSupported = readfile and writefile and isfile and isfolder and listfiles and delfile and delfolder
 
 -- Main vars
-local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
+local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
 local API, RMD
 
 -- Default Settings
@@ -24003,7 +25006,7 @@ Main = (function()
 		end
 	end
 
-	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
+	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","SoundViewer","AnimationViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
 	Main.ModulePathMap = {
 		Theme = "Core/Theme",
 		Lib = "Core/Lib",
@@ -24015,8 +25018,10 @@ Main = (function()
 		Explorer = "Explorer/Explorer",
 		Properties = "Explorer/Properties",
 		SaveInstance = "Explorer/SaveInstance",
-		ModelViewer = "Explorer/ModelViewer",
-		ImageViewer = "Explorer/ImageViewer",
+		ModelViewer = "Roblox Assets Viewer/ModelViewer",
+		ImageViewer = "Roblox Assets Viewer/ImageViewer",
+		SoundViewer = "Roblox Assets Viewer/SoundViewer",
+		AnimationViewer = "Roblox Assets Viewer/AnimationViewer",
 		ObjectLinks = "Explorer/ObjectLinks",
 		InstanceSerializer = "Explorer/InstanceSerializer",
 		SmartDecompiler = "Search/SmartDecompiler",
@@ -24410,6 +25415,10 @@ Main = (function()
 
 				moduleData.PluginData = control.PluginData
 
+				if type(control.InitAfterMain) == "function" then
+					pcall(control.InitAfterMain, Apps)
+				end
+
 				return moduleData
 			else
 				Main.Error("CANNOT FIND FILE MODULE "..pluginDir)
@@ -24439,6 +25448,8 @@ Main = (function()
 		RemoteUsageMap = Apps.RemoteUsageMap
 		ObjectLinks = Apps.ObjectLinks
 		ImageViewer = Apps.ImageViewer
+		SoundViewer = Apps.SoundViewer
+		AnimationViewer = Apps.AnimationViewer
 		ClientIndex = Apps.ClientIndex
 		ActivityMap = Apps.ActivityMap
 		DependencyGraph = Apps.DependencyGraph
@@ -24475,6 +25486,8 @@ Main = (function()
 			RemoteUsageMap = RemoteUsageMap,
 			ObjectLinks = ObjectLinks,
 			ImageViewer = ImageViewer,
+			SoundViewer = SoundViewer,
+			AnimationViewer = AnimationViewer,
 			ClientIndex = ClientIndex,
 			ActivityMap = ActivityMap,
 			DependencyGraph = DependencyGraph,
@@ -26915,13 +27928,14 @@ Main = (function()
 		Main.CreateLazyWindowApp({Name = "Save Instance", IconMap = Main.LargeIcons, Icon = "Book", Module = SaveInstance})
 
 		Main.CreateLazyWindowApp({Name = "3D Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ModelViewer, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Image Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ImageViewer, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Sound Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = SoundViewer, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Animation Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = AnimationViewer, Hidden = true})
 
 		Main.CreateLazyWindowApp({Name = "Search Center", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = CodeSearch})
 		Main.CreateLazyWindowApp({Name = "Script Relations", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ScriptRelations, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Dependency Graph", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = DependencyGraph, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Smart Search", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = SmartSearch, Hidden = true})
-
-		Main.CreateLazyWindowApp({Name = "Image Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ImageViewer, Hidden = true})
 
 		Main.CreateLazyWindowApp({Name = "Runtime Monitor", IconMap = Main.LargeIcons, Icon = "Watcher", Module = RuntimeInspector})
 		Main.CreateLazyWindowApp({Name = "Remote Usage", IconMap = Main.LargeIcons, Icon = "Output", Module = RemoteUsageMap, Hidden = true})
@@ -29703,7 +30717,7 @@ local function main()
 		BindableEvent         = "Event",
 	}
 
-	local window, list_frame, tree_frame, scroll_v, status_label, detail_label, empty_label
+	local window, list_frame, tree_frame, scroll_v, status_label, detail_label, empty_label, list_container
 	local rebuild_list
 	local rule_bar, rule_label, modal, modal_box
 
@@ -30540,7 +31554,7 @@ local function main()
 		rule_clear_btn.Position = UDim2.new(1, -58, 0, 4)
 		rule_clear_btn.Size = UDim2.new(0, 50, 0, 18)
 
-		local list_container = Instance.new("Frame")
+		list_container = Instance.new("Frame")
 		list_container.BackgroundColor3 = settings_ref.Theme.Main2
 		list_container.BorderSizePixel  = 0
 		list_container.Size             = UDim2.new(1, -16, 1, -28)
@@ -33159,6 +34173,614 @@ return {
 	InitAfterMain = initAfterMain,
 	Main = main,
 	PluginData = plugin_data,
+}
+]],
+	["TrackAnimationID.lua"] = [[
+--!nocheck
+
+local _main_ref, lib_ref, apps_ref, settings_ref, env_ref, theme_ref
+
+local plugin_data = {
+	name         = "TrackAnimationID",
+	FriendlyName = "Animation Tracker",
+}
+
+local function initDeps(data)
+	_main_ref    = data.Main
+	lib_ref      = data.Lib
+	apps_ref     = data.Apps
+	settings_ref = data.Settings
+	env_ref      = data.env
+end
+
+local function initAfterMain(t)
+	theme_ref    = t.Theme
+end
+
+local function get_theme()
+	return theme_ref or (apps_ref and apps_ref.Theme)
+end
+
+local function inst_path(obj)
+	if not obj then return "?" end
+	local ok, path = pcall(function()
+		local parts, cur = {}, obj
+		while cur and cur ~= game do
+			table.insert(parts, 1, cur.Name)
+			cur = cur.Parent
+		end
+		table.insert(parts, 1, "game")
+		return table.concat(parts, ".")
+	end)
+	return ok and path or tostring(obj)
+end
+
+local function normalizeAsset(value)
+	value = tostring(value or "")
+	if value == "" then return "" end
+	local id = value:match("rbxassetid://(%d+)") or value:match("[?&]id=(%d+)") or value:match("asset/%?id=(%d+)") or value:match("(%d+)")
+	if id and value:find("rbxassetid://", 1, true) == nil then
+		return "rbxassetid://" .. id
+	end
+	return value
+end
+
+local function main()
+	local plugin = {}
+	plugin.PluginData = plugin_data
+
+	local animations = {}
+	local animationMap = {}
+	local filtered_items = {}
+	local log_frames = {}
+	local row_item_map = {}
+	local selected_item = nil
+	local filter_text = ""
+
+	local window, list_frame, scroll_v, status_label, empty_label, list_container
+	local path_box, preview_btn, copy_btn, error_label
+	local rebuild_list
+
+	local function matches(item)
+		if filter_text == "" then return true end
+		local low = filter_text:lower()
+		return item.Name:lower():find(low, 1, true) or item.Asset:lower():find(low, 1, true) or item.Path:lower():find(low, 1, true)
+	end
+
+	local function update_scroll()
+		if scroll_v then
+			scroll_v.TotalSpace = #log_frames
+			scroll_v.Index = math.max(0, math.min(scroll_v.Index, #log_frames - scroll_v.VisibleSpace))
+			scroll_v:Update()
+		end
+	end
+
+	local function rebuild_list_highlights()
+		for _, row in ipairs(log_frames) do
+			local item = row_item_map[row]
+			if item == selected_item then
+				row.BackgroundColor3 = settings_ref.Theme.ListSelection
+			else
+				row.BackgroundColor3 = settings_ref.Theme.Main1
+			end
+		end
+	end
+
+	local function ensureTool(tool)
+		if not tool then return false end
+		if tool.EnsureInit then
+			return tool.EnsureInit()
+		end
+		return true
+	end
+
+	local function open_viewer(item)
+		if not item then return end
+		local av = apps_ref.AnimationViewer
+		if av and ensureTool(av) and av.ShowForObject then
+			local animInstance = item.Instance
+			if not animInstance or not animInstance.Parent then
+				-- Fallback: construct temporary Animation instance to view
+				local newAnim = Instance.new("Animation")
+				newAnim.Name = item.Name
+				newAnim.AnimationId = item.Asset
+				animInstance = newAnim
+			end
+			task.spawn(function()
+				av.ShowForObject(animInstance)
+			end)
+		else
+			error_label.Text = "Animation Viewer module not active/found."
+			error_label.TextColor3 = Color3.fromRGB(239, 68, 68)
+		end
+	end
+
+	local function show_details(item)
+		selected_item = item
+		if not item then
+			path_box.Text = ""
+			preview_btn.Active = false
+			preview_btn.BackgroundColor3 = settings_ref.Theme.Main1
+			copy_btn.Active = false
+			copy_btn.BackgroundColor3 = settings_ref.Theme.Main1
+			error_label.Text = ""
+			return
+		end
+		
+		path_box.Text = item.Asset .. "\nPath: " .. item.Path .. "\nLogged: " .. item.Time
+		
+		preview_btn.Active = true
+		preview_btn.BackgroundColor3 = settings_ref.Theme.Button
+		copy_btn.Active = true
+		copy_btn.BackgroundColor3 = settings_ref.Theme.Button
+		error_label.Text = ""
+	end
+
+	local function push_row(item)
+		if not list_frame then return end
+		if empty_label then empty_label.Visible = false end
+		
+		local row = Instance.new("Frame")
+		row.BackgroundColor3 = settings_ref.Theme.Main1
+		row.BorderSizePixel  = 0
+		row.Size             = UDim2.new(1, 0, 0, 36)
+		row.ClipsDescendants = true
+		
+		local badge = Instance.new("Frame", row)
+		badge.BackgroundColor3 = Color3.fromRGB(59, 130, 246) -- Blue badge for tracked animation
+		badge.BorderSizePixel  = 0
+		badge.Size             = UDim2.new(0, 3, 1, 0)
+		
+		local name_lbl = Instance.new("TextLabel", row)
+		name_lbl.BackgroundTransparency = 1
+		name_lbl.Position  = UDim2.new(0, 8, 0, 2)
+		name_lbl.Size      = UDim2.new(1, -16, 0, 16)
+		name_lbl.Font      = get_theme() and get_theme().MapFont(Enum.Font.SourceSansBold) or Enum.Font.SourceSansBold
+		name_lbl.TextSize  = 13
+		name_lbl.TextColor3 = settings_ref.Theme.Text
+		name_lbl.TextXAlignment = Enum.TextXAlignment.Left
+		name_lbl.Text = item.Name
+		
+		local path_lbl = Instance.new("TextLabel", row)
+		path_lbl.BackgroundTransparency = 1
+		path_lbl.Position  = UDim2.new(0, 8, 0, 18)
+		path_lbl.Size      = UDim2.new(1, -16, 0, 16)
+		path_lbl.Font      = Enum.Font.Code
+		path_lbl.TextSize  = 10
+		path_lbl.TextColor3 = settings_ref.Theme.PlaceholderText
+		path_lbl.TextXAlignment = Enum.TextXAlignment.Left
+		path_lbl.TextTruncate = Enum.TextTruncate.AtEnd
+		path_lbl.Text = item.Asset .. "  |  " .. item.Path
+		
+		local separator = Instance.new("Frame", row)
+		separator.BackgroundColor3 = settings_ref.Theme.Outline1
+		separator.BorderSizePixel = 0
+		separator.Size = UDim2.new(1, 0, 0, 1)
+		separator.Position = UDim2.new(0, 0, 1, -1)
+		
+		local lastClick = 0
+		row.InputBegan:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseMovement then
+				row.BackgroundColor3 = selected_item == item and settings_ref.Theme.ListSelection or settings_ref.Theme.ButtonHover
+			elseif i.UserInputType == Enum.UserInputType.MouseButton1 then
+				selected_item = item
+				show_details(item)
+				rebuild_list_highlights()
+				
+				local now = os.clock()
+				if now - lastClick < 0.35 then
+					open_viewer(item)
+				end
+				lastClick = now
+			end
+		end)
+		
+		row.InputEnded:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseMovement then
+				row.BackgroundColor3 = selected_item == item and settings_ref.Theme.ListSelection or settings_ref.Theme.Main1
+			end
+		end)
+		
+		row.LayoutOrder = #log_frames + 1
+		row.Parent = list_frame
+		table.insert(log_frames, row)
+		row_item_map[row] = item
+	end
+
+	local rebuild_pending = false
+	local function queue_rebuild()
+		if rebuild_pending then return end
+		rebuild_pending = true
+		task.defer(function()
+			rebuild_pending = false
+			rebuild_list()
+		end)
+	end
+
+	rebuild_list = function()
+		for _, f in ipairs(log_frames) do f:Destroy() end
+		log_frames = {}
+		table.clear(row_item_map)
+		
+		table.clear(filtered_items)
+		for _, item in ipairs(animations) do
+			if matches(item) then
+				table.insert(filtered_items, item)
+			end
+		end
+		
+		local max_visible = 200
+		local count = 0
+		for i = #filtered_items, 1, -1 do
+			local item = filtered_items[i]
+			count += 1
+			if count > max_visible then break end
+			push_row(item)
+		end
+		
+		if empty_label then
+			empty_label.Visible = #filtered_items == 0
+			empty_label.Text = #animations == 0 and "No tracked animations found" or "No animations match filter"
+		end
+		
+		if status_label then
+			local count_str = #filtered_items > max_visible and (max_visible .. "+ of " .. #filtered_items) or tostring(#filtered_items)
+			status_label.Text = #animations .. " tracked (" .. count_str .. " filtered)"
+		end
+		
+		if scroll_v then
+			scroll_v.TotalSpace = #log_frames
+			scroll_v.VisibleSpace = math.floor(list_container.AbsoluteSize.Y / 37)
+			scroll_v:Update()
+		end
+		rebuild_list_highlights()
+	end
+
+	local function make_btn(parent, text, y, h, callback)
+		local btn = Instance.new("TextButton")
+		btn.BorderSizePixel  = 0
+		btn.Font             = Enum.Font.SourceSans
+		btn.TextSize         = 14
+		btn.Text             = text
+		btn.AutoButtonColor  = false
+		btn.Size             = UDim2.new(1, -20, 0, h)
+		btn.Position         = UDim2.new(0, 10, 0, y)
+		btn.Parent           = parent
+		btn.MouseButton1Click:Connect(callback)
+		if get_theme() then
+			get_theme().StyleButton(btn)
+		else
+			btn.BackgroundColor3 = settings_ref.Theme.Button
+			btn.TextColor3       = settings_ref.Theme.Text
+			local c = Instance.new("UICorner", btn)
+			c.CornerRadius = UDim.new(0, 4)
+			btn.MouseEnter:Connect(function() if btn.Active then btn.BackgroundColor3 = Color3.fromRGB(55, 63, 75) end end)
+			btn.MouseLeave:Connect(function() if btn.Active then btn.BackgroundColor3 = settings_ref.Theme.Button end end)
+		end
+		return btn
+	end
+
+	local function trackAnimation(anim)
+		if not anim or typeof(anim) ~= "Instance" or not anim:IsA("Animation") then return end
+		
+		local id = normalizeAsset(anim.AnimationId)
+		if id == "" then
+			-- In case AnimationId is set dynamically later
+			local con
+			con = anim:GetPropertyChangedSignal("AnimationId"):Connect(function()
+				local newId = normalizeAsset(anim.AnimationId)
+				if newId ~= "" then
+					con:Disconnect()
+					trackAnimation(anim)
+				end
+			end)
+			return
+		end
+		
+		if not animationMap[id] then
+			local item = {
+				Asset = id,
+				Name = anim.Name ~= "" and anim.Name or "Animation",
+				Path = inst_path(anim),
+				Instance = anim,
+				Time = os.date("%H:%M:%S")
+			}
+			animationMap[id] = item
+			table.insert(animations, item)
+			
+			if window and window.GuiElems.Content.Visible then
+				queue_rebuild()
+			elseif status_label then
+				status_label.Text = #animations .. " tracked"
+			end
+		else
+			local item = animationMap[id]
+			if anim.Parent then
+				item.Path = inst_path(anim)
+				item.Instance = anim
+				if anim.Name ~= "" then
+					item.Name = anim.Name
+				end
+			end
+		end
+	end
+
+	local function setupHooks()
+		-- 1. Scan game hierarchy asynchronously (using targeted services to avoid game:GetDescendants freeze)
+		task.spawn(function()
+			local services = {
+				workspace,
+				game:GetService("ReplicatedStorage"),
+				game:GetService("StarterPack"),
+				game:GetService("StarterGui"),
+				game:GetService("ReplicatedFirst")
+			}
+			for _, service in ipairs(services) do
+				local ok, descs = pcall(service.GetDescendants, service)
+				if ok then
+					for i, obj in ipairs(descs) do
+						if obj:IsA("Animation") then
+							trackAnimation(obj)
+						end
+						if i % 100 == 0 then
+							task.wait()
+						end
+					end
+				end
+			end
+			
+			-- Nil instances scan
+			if env_ref and env_ref.getnilinstances then
+				local ok2, nils = pcall(env_ref.getnilinstances)
+				if ok2 and typeof(nils) == "table" then
+					for _, obj in pairs(nils) do
+						if typeof(obj) == "Instance" and obj:IsA("Animation") then
+							trackAnimation(obj)
+						end
+					end
+				end
+			end
+		end)
+		
+		-- 2. Hook DescendantAdded
+		pcall(function()
+			game.DescendantAdded:Connect(function(desc)
+				if desc:IsA("Animation") then
+					trackAnimation(desc)
+				end
+			end)
+		end)
+		
+		-- 3. Hook Animator.LoadAnimation / Humanoid.LoadAnimation directly
+		local hook = env_ref and env_ref.hookfunction or hookfunction
+		if hook then
+			local origHumanoidLoad
+			pcall(function()
+				local testHumanoid = Instance.new("Humanoid")
+				origHumanoidLoad = hook(testHumanoid.LoadAnimation, function(self, animation)
+					if typeof(animation) == "Instance" and animation:IsA("Animation") then
+						task.spawn(trackAnimation, animation)
+					end
+					return origHumanoidLoad(self, animation)
+				end)
+			end)
+			
+			local origAnimatorLoad
+			pcall(function()
+				local testAnimator = Instance.new("Animator")
+				origAnimatorLoad = hook(testAnimator.LoadAnimation, function(self, animation)
+					if typeof(animation) == "Instance" and animation:IsA("Animation") then
+						task.spawn(trackAnimation, animation)
+					end
+					return origAnimatorLoad(self, animation)
+				end)
+			end)
+		end
+	end
+
+	plugin.Init = function()
+		window = lib_ref.Window.new()
+		window:SetTitle("Animation Tracker")
+		window:Resize(720, 400)
+		plugin.Window = window
+
+		local toolbar = Instance.new("Frame")
+		toolbar.BackgroundColor3 = settings_ref.Theme.Menu
+		toolbar.BorderSizePixel  = 0
+		toolbar.Size             = UDim2.new(1, 0, 0, 26)
+		toolbar.Parent           = window.GuiElems.Content
+
+		local clear_btn = Instance.new("TextButton")
+		clear_btn.BorderSizePixel = 0
+		clear_btn.Font = Enum.Font.SourceSans
+		clear_btn.TextSize = 13
+		clear_btn.Text = "Clear"
+		clear_btn.AutoButtonColor = false
+		clear_btn.Size = UDim2.new(0, 64, 0, 18)
+		clear_btn.Position = UDim2.new(0, 4, 0, 4)
+		clear_btn.Parent = toolbar
+		if get_theme() then get_theme().StyleButton(clear_btn) end
+
+		status_label = Instance.new("TextLabel")
+		status_label.BackgroundTransparency = 1
+		status_label.Font       = get_theme() and get_theme().MapFont(Enum.Font.SourceSans) or Enum.Font.SourceSans
+		status_label.TextSize   = 12
+		status_label.TextColor3 = settings_ref.Theme.PlaceholderText
+		status_label.TextXAlignment = Enum.TextXAlignment.Right
+		status_label.Size       = UDim2.new(1, -80, 1, 0)
+		status_label.Position   = UDim2.new(0, 72, 0, 0)
+		status_label.Text       = #animations .. " tracked"
+		status_label.Parent     = toolbar
+
+		local search_bar = Instance.new("Frame")
+		search_bar.BackgroundColor3 = settings_ref.Theme.Main1
+		search_bar.BorderSizePixel  = 0
+		search_bar.Size             = UDim2.new(1, 0, 0, 26)
+		search_bar.Position         = UDim2.new(0, 0, 0, 26)
+		search_bar.Parent           = window.GuiElems.Content
+
+		local search_box = Instance.new("TextBox", search_bar)
+		search_box.BackgroundTransparency = 1
+		search_box.PlaceholderText  = "Search animation name or ID..."
+		search_box.PlaceholderColor3 = settings_ref.Theme.PlaceholderText
+		search_box.Text             = ""
+		search_box.Font             = Enum.Font.Code
+		search_box.TextSize         = 13
+		search_box.TextColor3       = settings_ref.Theme.Text
+		search_box.TextXAlignment   = Enum.TextXAlignment.Left
+		search_box.ClearTextOnFocus = false
+		search_box.Size             = UDim2.new(1, -14, 1, 0)
+		search_box.Position         = UDim2.new(0, 8, 0, 0)
+		search_box:GetPropertyChangedSignal("Text"):Connect(function()
+			filter_text = search_box.Text
+			queue_rebuild()
+		end)
+
+		local body = Instance.new("Frame")
+		body.BackgroundColor3 = settings_ref.Theme.Main2
+		body.BorderSizePixel = 0
+		body.Position = UDim2.new(0, 0, 0, 52)
+		body.Size = UDim2.new(1, 0, 1, -52)
+		body.Parent = window.GuiElems.Content
+
+		local left_panel = Instance.new("Frame")
+		left_panel.BackgroundColor3 = settings_ref.Theme.Main1
+		left_panel.BorderSizePixel = 0
+		left_panel.Size = UDim2.new(0, 320, 1, 0)
+		left_panel.Parent = body
+
+		list_container = Instance.new("Frame")
+		list_container.BackgroundColor3 = settings_ref.Theme.Main2
+		list_container.BorderSizePixel  = 0
+		list_container.Size             = UDim2.new(1, -16, 1, 0)
+		list_container.ClipsDescendants = true
+		list_container.Parent           = left_panel
+
+		list_frame = Instance.new("Frame")
+		list_frame.BackgroundTransparency = 1
+		list_frame.Size         = UDim2.new(1, 0, 0, 0)
+		list_frame.AutomaticSize = Enum.AutomaticSize.Y
+		list_frame.Parent       = list_container
+
+		local layout = Instance.new("UIListLayout", list_frame)
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Padding   = UDim.new(0, 1)
+
+		empty_label = Instance.new("TextLabel", list_container)
+		empty_label.BackgroundTransparency = 1
+		empty_label.Size = UDim2.new(1, 0, 0, 48)
+		empty_label.Position = UDim2.new(0, 0, 0.5, -24)
+		empty_label.Font = get_theme() and get_theme().MapFont(Enum.Font.SourceSans) or Enum.Font.SourceSans
+		empty_label.TextSize = 14
+		empty_label.TextColor3 = settings_ref.Theme.PlaceholderText
+		empty_label.Text = "No tracked animations found"
+		empty_label.Visible = true
+
+		scroll_v = lib_ref.ScrollBar.new()
+		scroll_v.WheelIncrement  = 3
+		scroll_v.Gui.Position    = UDim2.new(1, -16, 0, 0)
+		scroll_v.Gui.Size        = UDim2.new(0, 16, 1, 0)
+		scroll_v.Gui.Parent      = left_panel
+		scroll_v:SetScrollFrame(list_container)
+		scroll_v.Scrolled:Connect(function()
+			list_frame.Position = UDim2.new(0, 0, 0, -scroll_v.Index * 37)
+		end)
+
+		local split_line = Instance.new("Frame", body)
+		split_line.BackgroundColor3 = settings_ref.Theme.Outline1
+		split_line.BorderSizePixel = 0
+		split_line.Position = UDim2.new(0, 320, 0, 0)
+		split_line.Size = UDim2.new(0, 1, 1, 0)
+
+		local right_panel = Instance.new("Frame")
+		right_panel.BackgroundColor3 = settings_ref.Theme.Main2
+		right_panel.BorderSizePixel = 0
+		right_panel.Position = UDim2.new(0, 321, 0, 0)
+		right_panel.Size = UDim2.new(1, -321, 1, 0)
+		right_panel.Parent = body
+
+		local detail_lbl = Instance.new("TextLabel", right_panel)
+		detail_lbl.BackgroundTransparency = 1
+		detail_lbl.Position = UDim2.new(0, 10, 0, 10)
+		detail_lbl.Size = UDim2.new(1, -20, 0, 20)
+		detail_lbl.Font = get_theme() and get_theme().MapFont(Enum.Font.SourceSansBold) or Enum.Font.SourceSansBold
+		detail_lbl.TextSize = 14
+		detail_lbl.TextColor3 = settings_ref.Theme.Text
+		detail_lbl.TextXAlignment = Enum.TextXAlignment.Left
+		detail_lbl.Text = "Animation Details"
+
+		path_box = Instance.new("TextBox", right_panel)
+		path_box.BackgroundColor3 = settings_ref.Theme.Main1
+		path_box.BorderSizePixel = 0
+		path_box.Position = UDim2.new(0, 10, 0, 35)
+		path_box.Size = UDim2.new(1, -20, 0, 80)
+		path_box.Font = Enum.Font.Code
+		path_box.TextSize = 11
+		path_box.TextColor3 = settings_ref.Theme.Text
+		path_box.TextEditable = false
+		path_box.ClearTextOnFocus = false
+		path_box.MultiLine = true
+		path_box.TextWrapped = true
+		path_box.Text = ""
+		path_box.TextXAlignment = Enum.TextXAlignment.Left
+		path_box.TextYAlignment = Enum.TextYAlignment.Top
+		local pad = Instance.new("UIPadding", path_box)
+		pad.PaddingLeft = UDim.new(0, 6)
+		pad.PaddingRight = UDim.new(0, 6)
+		pad.PaddingTop = UDim.new(0, 6)
+		if get_theme() then get_theme().ApplyRounding(path_box, 4) end
+
+		preview_btn = make_btn(right_panel, "Open in Animation Viewer", 125, 28, function()
+			open_viewer(selected_item)
+		end)
+		
+		copy_btn = make_btn(right_panel, "Copy Animation ID", 159, 28, function()
+			if selected_item and env_ref and env_ref.setclipboard then
+				env_ref.setclipboard(selected_item.Asset)
+			end
+		end)
+
+		error_label = Instance.new("TextLabel", right_panel)
+		error_label.BackgroundTransparency = 1
+		error_label.Position = UDim2.new(0, 10, 0, 200)
+		error_label.Size = UDim2.new(1, -20, 1, -210)
+		error_label.Font = get_theme() and get_theme().MapFont(Enum.Font.SourceSans) or Enum.Font.SourceSans
+		error_label.TextSize = 12
+		error_label.TextColor3 = Color3.fromRGB(239, 68, 68)
+		error_label.TextWrapped = true
+		error_label.TextXAlignment = Enum.TextXAlignment.Left
+		error_label.TextYAlignment = Enum.TextYAlignment.Top
+		error_label.Text = ""
+
+		clear_btn.MouseButton1Click:Connect(function()
+			table.clear(animations)
+			table.clear(animationMap)
+			queue_rebuild()
+			show_details(nil)
+		end)
+
+		rebuild_list()
+		show_details(nil)
+
+		window.OnActivate:Connect(function()
+			if scroll_v then
+				scroll_v.TotalSpace   = #log_frames
+				scroll_v.VisibleSpace = math.floor(list_container.AbsoluteSize.Y / 37)
+				scroll_v:Update()
+			end
+		end)
+	end
+
+	setupHooks()
+
+	return plugin
+end
+
+return {
+	InitDeps      = initDeps,
+	InitAfterMain = initAfterMain,
+	Main          = main,
+	PluginData    = plugin_data,
 }
 ]],
 }

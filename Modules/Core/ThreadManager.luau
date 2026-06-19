@@ -91,7 +91,12 @@ local function main()
 			end
 		else
 			-- Fallback to workspace descendants
+			local count = 0
 			for _, v in ipairs(game:GetDescendants()) do
+				count = count + 1
+				if count % 250 == 0 then
+					task.wait()
+				end
 				if v:IsA("LocalScript") or v:IsA("ModuleScript") then
 					table.insert(scriptList, v)
 				end
@@ -398,8 +403,10 @@ local function main()
 		listLayout.Parent = listFrame
 
 		-- Initial Load
-		refreshScripts()
-		ThreadManager.Render()
+		task.spawn(function()
+			refreshScripts()
+			ThreadManager.Render()
+		end)
 		reportTool()
 	end
 

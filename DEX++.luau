@@ -53,7 +53,7 @@ local EmbeddedModules = {
 local isFsSupported = readfile and writefile and isfile and isfolder and listfiles and delfile and delfolder
 
 -- Main vars
-local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
+local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
 local API, RMD
 
 -- Default Settings
@@ -511,7 +511,7 @@ Main = (function()
 		end
 	end
 
-	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
+	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","SoundViewer","AnimationViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
 	Main.ModulePathMap = {
 		Theme = "Core/Theme",
 		Lib = "Core/Lib",
@@ -523,8 +523,10 @@ Main = (function()
 		Explorer = "Explorer/Explorer",
 		Properties = "Explorer/Properties",
 		SaveInstance = "Explorer/SaveInstance",
-		ModelViewer = "Explorer/ModelViewer",
-		ImageViewer = "Explorer/ImageViewer",
+		ModelViewer = "Roblox Assets Viewer/ModelViewer",
+		ImageViewer = "Roblox Assets Viewer/ImageViewer",
+		SoundViewer = "Roblox Assets Viewer/SoundViewer",
+		AnimationViewer = "Roblox Assets Viewer/AnimationViewer",
 		ObjectLinks = "Explorer/ObjectLinks",
 		InstanceSerializer = "Explorer/InstanceSerializer",
 		SmartDecompiler = "Search/SmartDecompiler",
@@ -918,6 +920,10 @@ Main = (function()
 
 				moduleData.PluginData = control.PluginData
 
+				if type(control.InitAfterMain) == "function" then
+					pcall(control.InitAfterMain, Apps)
+				end
+
 				return moduleData
 			else
 				Main.Error("CANNOT FIND FILE MODULE "..pluginDir)
@@ -947,6 +953,8 @@ Main = (function()
 		RemoteUsageMap = Apps.RemoteUsageMap
 		ObjectLinks = Apps.ObjectLinks
 		ImageViewer = Apps.ImageViewer
+		SoundViewer = Apps.SoundViewer
+		AnimationViewer = Apps.AnimationViewer
 		ClientIndex = Apps.ClientIndex
 		ActivityMap = Apps.ActivityMap
 		DependencyGraph = Apps.DependencyGraph
@@ -983,6 +991,8 @@ Main = (function()
 			RemoteUsageMap = RemoteUsageMap,
 			ObjectLinks = ObjectLinks,
 			ImageViewer = ImageViewer,
+			SoundViewer = SoundViewer,
+			AnimationViewer = AnimationViewer,
 			ClientIndex = ClientIndex,
 			ActivityMap = ActivityMap,
 			DependencyGraph = DependencyGraph,
@@ -3423,13 +3433,14 @@ Main = (function()
 		Main.CreateLazyWindowApp({Name = "Save Instance", IconMap = Main.LargeIcons, Icon = "Book", Module = SaveInstance})
 
 		Main.CreateLazyWindowApp({Name = "3D Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ModelViewer, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Image Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ImageViewer, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Sound Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = SoundViewer, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "Animation Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = AnimationViewer, Hidden = true})
 
 		Main.CreateLazyWindowApp({Name = "Search Center", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = CodeSearch})
 		Main.CreateLazyWindowApp({Name = "Script Relations", IconMap = Main.LargeIcons, Icon = "Watcher", Module = ScriptRelations, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Dependency Graph", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = DependencyGraph, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Smart Search", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = SmartSearch, Hidden = true})
-
-		Main.CreateLazyWindowApp({Name = "Image Viewer", IconMap = Main.LargeIcons, Icon = "Object", Module = ImageViewer, Hidden = true})
 
 		Main.CreateLazyWindowApp({Name = "Runtime Monitor", IconMap = Main.LargeIcons, Icon = "Watcher", Module = RuntimeInspector})
 		Main.CreateLazyWindowApp({Name = "Remote Usage", IconMap = Main.LargeIcons, Icon = "Output", Module = RemoteUsageMap, Hidden = true})

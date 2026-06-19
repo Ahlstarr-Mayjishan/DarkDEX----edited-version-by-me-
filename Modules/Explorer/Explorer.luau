@@ -7,7 +7,7 @@
 
 -- Common Locals
 local Main,Lib,Apps,Settings -- Main Containers
-local Explorer, Properties, Notepad, ModelViewer, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, Notebook -- Major Apps
+local Explorer, Properties, Notepad, ModelViewer, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, Notebook -- Major Apps
 local API,RMD,env,service,plr,create,createSimple -- Main Locals
 
 local function initDeps(data)
@@ -34,6 +34,8 @@ local function initAfterMain()
 	RemoteUsageMap = Apps.RemoteUsageMap
 	ObjectLinks = Apps.ObjectLinks
 	ImageViewer = Apps.ImageViewer
+	SoundViewer = Apps.SoundViewer
+	AnimationViewer = Apps.AnimationViewer
 	Notebook = Apps.Notebook
 end
 
@@ -1083,7 +1085,13 @@ local function main()
 		if env.setclipboard then context:AddRegistered("COPY_PATH") end
 		if env.setclipboard then context:AddRegistered("COPY_TO_AI") end
 		context:AddRegistered("FIND_OBJECT_LINKS", #sList ~= 1 or not ObjectLinks)
-		context:AddRegistered("VIEW_IMAGE_ASSETS", #sList ~= 1 or not ImageViewer)
+		if #sList == 1 and sList[1].Obj:IsA("Sound") then
+			context:AddRegistered("VIEW_SOUND_ASSETS", not SoundViewer)
+		elseif #sList == 1 and sList[1].Obj:IsA("Animation") then
+			context:AddRegistered("VIEW_ANIMATION_ASSETS", not AnimationViewer)
+		else
+			context:AddRegistered("VIEW_IMAGE_ASSETS", #sList ~= 1 or not ImageViewer)
+		end
 		context:AddRegistered("INSERT_OBJECT")
 		context:AddRegistered("SAVE_INST")
 		context:AddRegistered("TRACK_PROPERTIES", #sList ~= 1)
@@ -1795,6 +1803,16 @@ local function main()
 		context:Register("VIEW_IMAGE_ASSETS",{Name = "View Images", IconMap = Explorer.MiscIcons, Icon = "ViewScript", DisabledIcon = "Empty", OnClick = function()
 			local obj = selection.List[1] and selection.List[1].Obj
 			if obj and ensureTool(ImageViewer) then ImageViewer.ShowForObject(obj) end
+		end})
+
+		context:Register("VIEW_SOUND_ASSETS",{Name = "Preview Sound", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
+			local obj = selection.List[1] and selection.List[1].Obj
+			if obj and ensureTool(SoundViewer) then SoundViewer.ShowForObject(obj) end
+		end})
+
+		context:Register("VIEW_ANIMATION_ASSETS",{Name = "Preview Animation", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
+			local obj = selection.List[1] and selection.List[1].Obj
+			if obj and ensureTool(AnimationViewer) then AnimationViewer.ShowForObject(obj) end
 		end})
 
 		context:Register("COPY_API_PAGE",{Name = "Copy Roblox API Page URL", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function()

@@ -28,8 +28,10 @@ def build():
             "TaskRouter", "ThreadManager",
         ],
         "Explorer": [
-            "Explorer", "Properties", "SaveInstance", "ModelViewer",
-            "ImageViewer", "ObjectLinks", "InstanceSerializer",
+            "Explorer", "Properties", "SaveInstance", "ObjectLinks", "InstanceSerializer",
+        ],
+        "Roblox Assets Viewer": [
+            "ModelViewer", "ImageViewer", "SoundViewer", "AnimationViewer",
         ],
         "Search": [
             "SmartDecompiler", "Notepad", "ClientIndex", "CodeSearch",

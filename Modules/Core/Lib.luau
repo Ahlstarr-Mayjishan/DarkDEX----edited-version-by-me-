@@ -33,6 +33,8 @@ end
 
 local function main()
 	local Lib = {}
+	Lib.create = create
+	Lib.createSimple = createSimple
 
 	local renderStepped = service.RunService.RenderStepped
 	local signalWait = renderStepped.wait

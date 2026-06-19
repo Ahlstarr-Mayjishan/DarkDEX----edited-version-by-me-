@@ -124,7 +124,7 @@ local function main()
 		BindableEvent         = "Event",
 	}
 
-	local window, list_frame, tree_frame, scroll_v, status_label, detail_label, empty_label
+	local window, list_frame, tree_frame, scroll_v, status_label, detail_label, empty_label, list_container
 	local rebuild_list
 	local rule_bar, rule_label, modal, modal_box
 
@@ -961,7 +961,7 @@ local function main()
 		rule_clear_btn.Position = UDim2.new(1, -58, 0, 4)
 		rule_clear_btn.Size = UDim2.new(0, 50, 0, 18)
 
-		local list_container = Instance.new("Frame")
+		list_container = Instance.new("Frame")
 		list_container.BackgroundColor3 = settings_ref.Theme.Main2
 		list_container.BorderSizePixel  = 0
 		list_container.Size             = UDim2.new(1, -16, 1, -28)
