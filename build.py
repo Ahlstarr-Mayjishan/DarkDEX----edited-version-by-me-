@@ -41,6 +41,9 @@ def build():
             "PropertyTracker", "RemoteFuzzer", "ClientIntelligence",
             "InspectorHub",
         ],
+        "Tools": [
+            "IDESync",
+        ],
     }
     module_list = [name for names in module_groups.values() for name in names]
     module_paths = {

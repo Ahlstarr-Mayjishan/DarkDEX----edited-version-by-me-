@@ -94,6 +94,7 @@ local function main()
 	local hook_cons   = {}
 	local seen        = {}
 	setmetatable(seen, { __mode = "k" })
+	local rules       = {}
 
 	local colors = {
 		out_remote   = Color3.fromRGB(100, 200, 255),
@@ -125,6 +126,7 @@ local function main()
 
 	local window, list_frame, tree_frame, scroll_v, status_label, detail_label, empty_label
 	local rebuild_list
+	local rule_bar, rule_label, modal, modal_box
 
 	local function report_tool(extra)
 		if not main_ref or not main_ref.ReportToolState then return end
@@ -219,7 +221,8 @@ local function main()
 
 	local function update_detail()
 		if not detail_label then return end
-		if selected_path == "" then
+		local has_selected = selected_path ~= ""
+		if not has_selected then
 			detail_label.Text = "All remotes"
 		else
 			local stat = remote_stats[selected_path]
@@ -227,6 +230,44 @@ local function main()
 				detail_label.Text = stat.class .. "  |  " .. stat.count .. " calls  |  " .. selected_path
 			else
 				detail_label.Text = selected_path
+			end
+		end
+
+		if rule_bar then
+			rule_bar.Visible = has_selected
+			if has_selected then
+				list_container.Position = UDim2.new(0, 0, 0, 54)
+				list_container.Size = UDim2.new(1, -16, 1, -54)
+				if scroll_v then
+					scroll_v.Gui.Position = UDim2.new(1, -16, 0, 54)
+					scroll_v.Gui.Size = UDim2.new(0, 16, 1, -54)
+				end
+
+				local rule = rules[selected_path]
+				if rule then
+					if rule.action == "block" then
+						rule_label.Text = "Responder: Blocked"
+						rule_label.TextColor3 = Color3.fromRGB(244, 63, 94)
+					elseif rule.action == "mock" then
+						rule_label.Text = "Responder: Mocked"
+						rule_label.TextColor3 = Color3.fromRGB(234, 179, 8)
+					end
+				else
+					rule_label.Text = "Responder: None"
+					rule_label.TextColor3 = settings_ref.Theme.Text
+				end
+			else
+				list_container.Position = UDim2.new(0, 0, 0, 28)
+				list_container.Size = UDim2.new(1, -16, 1, -28)
+				if scroll_v then
+					scroll_v.Gui.Position = UDim2.new(1, -16, 0, 28)
+					scroll_v.Gui.Size = UDim2.new(0, 16, 1, -28)
+				end
+			end
+			if scroll_v then
+				scroll_v.TotalSpace = #log_frames
+				scroll_v.VisibleSpace = math.max(1, math.floor(list_container.AbsoluteSize.Y / 37))
+				scroll_v:Update()
 			end
 		end
 	end
@@ -591,6 +632,12 @@ local function main()
 
 		local ok, con = pcall(function()
 			return inst[sig]:Connect(function(...)
+				local path = inst_path(inst)
+				local rule = rules[path]
+				if rule and rule.action == "block" then
+					add_log("in", inst, sig .. " [BLOCKED]", table.pack(...))
+					return
+				end
 				add_log("in", inst, sig, table.pack(...))
 			end)
 		end)
@@ -615,6 +662,57 @@ local function main()
 					and remote_classes[self.ClassName]
 					and out_methods[method]
 				then
+					local path = inst_path(self)
+					local rule = rules[path]
+					if rule then
+						if rule.action == "block" then
+							add_log("out", self, method .. " [BLOCKED]", table.pack(...))
+							if self.ClassName == "RemoteFunction" or self.ClassName == "BindableFunction" then
+								local mockVal = rule.val
+								if type(mockVal) == "table" then
+									return unpack(mockVal)
+								else
+									return mockVal
+								end
+							end
+							return
+						elseif rule.action == "mock" then
+							add_log("out", self, method .. " [MOCKED]", table.pack(...))
+							local val = rule.val
+							if type(val) == "function" then
+								local success, res = pcall(val, ...)
+								if success then
+									if self.ClassName == "RemoteFunction" or self.ClassName == "BindableFunction" then
+										if type(res) == "table" then
+											return unpack(res)
+										else
+											return res
+										end
+									else
+										if type(res) == "table" then
+											return namecall_orig(self, unpack(res))
+										else
+											return namecall_orig(self, res)
+										end
+									end
+								end
+							else
+								if self.ClassName == "RemoteFunction" or self.ClassName == "BindableFunction" then
+									if type(val) == "table" then
+										return unpack(val)
+									else
+										return val
+									end
+								else
+									if type(val) == "table" then
+										return namecall_orig(self, unpack(val))
+									else
+										return namecall_orig(self, val)
+									end
+								end
+							end
+						end
+					end
 					add_log("out", self, method, table.pack(...))
 				end
 				return namecall_orig(self, ...)
@@ -833,6 +931,36 @@ local function main()
 		detail_label.TextTruncate = Enum.TextTruncate.AtEnd
 		detail_label.Text = "All remotes"
 
+		rule_bar = Instance.new("Frame")
+		rule_bar.BackgroundColor3 = settings_ref.Theme.Main1
+		rule_bar.BorderSizePixel = 0
+		rule_bar.Position = UDim2.new(0, 0, 0, 28)
+		rule_bar.Size = UDim2.new(1, 0, 0, 26)
+		rule_bar.Parent = right_panel
+		rule_bar.Visible = false
+
+		rule_label = Instance.new("TextLabel", rule_bar)
+		rule_label.BackgroundTransparency = 1
+		rule_label.Position = UDim2.new(0, 8, 0, 0)
+		rule_label.Size = UDim2.new(0.5, 0, 1, 0)
+		rule_label.Font = Enum.Font.SourceSans
+		rule_label.TextSize = 13
+		rule_label.TextColor3 = settings_ref.Theme.Text
+		rule_label.TextXAlignment = Enum.TextXAlignment.Left
+		rule_label.Text = "Responder: None"
+
+		local block_btn = make_btn(rule_bar, "Block", 240, 50)
+		block_btn.Position = UDim2.new(1, -170, 0, 4)
+		block_btn.Size = UDim2.new(0, 50, 0, 18)
+
+		local mock_btn = make_btn(rule_bar, "Mock...", 296, 50)
+		mock_btn.Position = UDim2.new(1, -114, 0, 4)
+		mock_btn.Size = UDim2.new(0, 50, 0, 18)
+
+		local rule_clear_btn = make_btn(rule_bar, "Clear", 352, 50)
+		rule_clear_btn.Position = UDim2.new(1, -58, 0, 4)
+		rule_clear_btn.Size = UDim2.new(0, 50, 0, 18)
+
 		local list_container = Instance.new("Frame")
 		list_container.BackgroundColor3 = settings_ref.Theme.Main2
 		list_container.BorderSizePixel  = 0
@@ -869,6 +997,142 @@ local function main()
 		scroll_v:SetScrollFrame(list_container)
 		scroll_v.Scrolled:Connect(function()
 			list_frame.Position = UDim2.new(0, 0, 0, -scroll_v.Index * 37)
+		end)
+
+		modal = Instance.new("Frame")
+		modal.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
+		modal.BackgroundTransparency = 0.4
+		modal.BorderSizePixel = 0
+		modal.Size = UDim2.new(1, 0, 1, 0)
+		modal.ZIndex = 10
+		modal.Visible = false
+		modal.Parent = window.GuiElems.Content
+
+		local modal_content = Instance.new("Frame", modal)
+		modal_content.BackgroundColor3 = settings_ref.Theme.Main1
+		modal_content.BorderColor3 = settings_ref.Theme.Outline2
+		modal_content.Size = UDim2.new(0, 420, 0, 190)
+		modal_content.Position = UDim2.new(0.5, -210, 0.5, -95)
+		if theme_ref and theme_ref.ApplyRounding then
+			theme_ref.ApplyRounding(modal_content, 6)
+		end
+
+		local modal_title = Instance.new("TextLabel", modal_content)
+		modal_title.BackgroundTransparency = 1
+		modal_title.Position = UDim2.new(0, 12, 0, 8)
+		modal_title.Size = UDim2.new(1, -24, 0, 20)
+		modal_title.Font = theme_ref and theme_ref.MapFont(Enum.Font.SourceSansBold) or Enum.Font.SourceSansBold
+		modal_title.TextColor3 = settings_ref.Theme.Text
+		modal_title.TextSize = 14
+		modal_title.TextXAlignment = Enum.TextXAlignment.Left
+		modal_title.Text = "Set Mock Value (Luau expression)"
+
+		local modal_desc = Instance.new("TextLabel", modal_content)
+		modal_desc.BackgroundTransparency = 1
+		modal_desc.Position = UDim2.new(0, 12, 0, 30)
+		modal_desc.Size = UDim2.new(1, -24, 0, 32)
+		modal_desc.Font = theme_ref and theme_ref.MapFont(Enum.Font.SourceSans) or Enum.Font.SourceSans
+		modal_desc.TextColor3 = settings_ref.Theme.PlaceholderText
+		modal_desc.TextSize = 12
+		modal_desc.TextWrapped = true
+		modal_desc.TextXAlignment = Enum.TextXAlignment.Left
+		modal_desc.TextYAlignment = Enum.TextYAlignment.Top
+		modal_desc.Text = "For Events: return a table containing modified arguments, e.g. {50, 'modified'}. For Functions: return the mocked return value(s)."
+
+		modal_box = Instance.new("TextBox", modal_content)
+		modal_box.BackgroundColor3 = settings_ref.Theme.Main2
+		modal_box.BorderColor3 = settings_ref.Theme.Outline1
+		modal_box.Position = UDim2.new(0, 12, 0, 68)
+		modal_box.Size = UDim2.new(1, -24, 0, 72)
+		modal_box.Font = Enum.Font.Code
+		modal_box.TextSize = 12
+		modal_box.TextColor3 = settings_ref.Theme.Text
+		modal_box.TextXAlignment = Enum.TextXAlignment.Left
+		modal_box.TextYAlignment = Enum.TextYAlignment.Top
+		modal_box.ClearTextOnFocus = false
+		modal_box.MultiLine = true
+		modal_box.Text = ""
+
+		local save_btn = make_btn(modal_content, "Save", 280, 60)
+		save_btn.Position = UDim2.new(1, -140, 1, -32)
+		save_btn.Size = UDim2.new(0, 60, 0, 24)
+
+		local cancel_btn = make_btn(modal_content, "Cancel", 350, 60)
+		cancel_btn.Position = UDim2.new(1, -72, 1, -32)
+		cancel_btn.Size = UDim2.new(0, 60, 0, 24)
+
+		block_btn.MouseButton1Click:Connect(function()
+			if selected_path == "" then return end
+			local rule = rules[selected_path]
+			if rule and rule.action == "block" then
+				rules[selected_path] = nil
+			else
+				rules[selected_path] = { action = "block" }
+			end
+			update_detail()
+		end)
+
+		mock_btn.MouseButton1Click:Connect(function()
+			if selected_path == "" then return end
+			local rule = rules[selected_path]
+			if rule and rule.action == "mock" then
+				modal_box.Text = rule.raw or ""
+			else
+				modal_box.Text = ""
+			end
+			modal.Visible = true
+			modal_box:CaptureFocus()
+		end)
+
+		rule_clear_btn.MouseButton1Click:Connect(function()
+			if selected_path == "" then return end
+			rules[selected_path] = nil
+			update_detail()
+		end)
+
+		save_btn.MouseButton1Click:Connect(function()
+			local code = modal_box.Text
+			if code == "" then
+				rules[selected_path] = nil
+				modal.Visible = false
+				update_detail()
+				return
+			end
+
+			local fn, err = loadstring("return " .. code)
+			if not fn then
+				fn, err = loadstring(code)
+			end
+
+			if fn then
+				local ok, val = pcall(fn)
+				if ok then
+					rules[selected_path] = {
+						action = "mock",
+						val = type(val) == "function" and val or val,
+						raw = code
+					}
+					modal.Visible = false
+					update_detail()
+				else
+					rules[selected_path] = {
+						action = "mock",
+						val = fn,
+						raw = code
+					}
+					modal.Visible = false
+					update_detail()
+				end
+			else
+				warn("Failed to compile expression: " .. tostring(err))
+				if main_ref and main_ref.Message then
+					pcall(main_ref.Message, "Error compiling expression: " .. tostring(err))
+				end
+			end
+		end)
+
+		cancel_btn.MouseButton1Click:Connect(function()
+			modal.Visible = false
 		end)
 
 		local function update_button_states()

@@ -332,46 +332,84 @@ local function main()
 				-- Run decompile safely
 				local success, source = pcall(env.decompile, scr)
 				if success and type(source) == "string" and #source > 0 then
-					-- Check require(number) backdoors
-					local backdoorRequire = source:match("require%s*%(%s*%d+%s*%)")
-					if backdoorRequire then
-						table.insert(findings, {
-							Severity = "High",
-							Title = string.format("Backdoor Loader in '%s'", scr.Name),
-							Description = string.format("Flags require(AssetId): '%s'. Path: %s", backdoorRequire, getPath(scr)),
-							Object = scr
-						})
+					local analyzedViaHelper = false
+
+					-- Try helper AST deep analysis
+					local req = env.request or (syn and syn.request) or (http and http.request) or http_request or request
+					if req then
+						local okReq, result = pcall(function()
+							return req({
+								Url = "http://localhost:8080/analyze-source-deep",
+								Method = "POST",
+								Headers = {
+									["Content-Type"] = "text/plain"
+								},
+								Body = source
+							})
+						end)
+
+						if okReq and result and result.StatusCode == 200 then
+							local okDecode, data = pcall(function()
+								return service.HttpService:JSONDecode(result.Body)
+							end)
+
+							if okDecode and data and data.findings then
+								analyzedViaHelper = true
+								for _, finding in ipairs(data.findings) do
+									table.insert(findings, {
+										Severity = finding.severity or "Medium",
+										Title = string.format("%s in '%s'", finding.title or "Security finding", scr.Name),
+										Description = string.format("[Line %d] %s. Path: %s", finding.line or 0, finding.description or "", getPath(scr)),
+										Object = scr
+									})
+								end
+							end
+						end
 					end
 
-					-- Check loadstring
-					if source:match("[^%w_]loadstring%s*%(") then
-						table.insert(findings, {
-							Severity = "Medium",
-							Title = string.format("Dynamic Code (loadstring) in '%s'", scr.Name),
-							Description = "Script uses loadstring which executes dynamic unverified code. Path: " .. getPath(scr),
-							Object = scr
-						})
-					end
+					-- Fallback to regex checks if helper analysis was unavailable
+					if not analyzedViaHelper then
+						-- Check require(number) backdoors
+						local backdoorRequire = source:match("require%s*%(%s*%d+%s*%)")
+						if backdoorRequire then
+							table.insert(findings, {
+								Severity = "High",
+								Title = string.format("Backdoor Loader in '%s'", scr.Name),
+								Description = string.format("Flags require(AssetId): '%s'. Path: %s", backdoorRequire, getPath(scr)),
+								Object = scr
+							})
+						end
 
-					-- Check obfuscation (high density of decimal escapes)
-					local _, escapeCount = source:gsub("\\[0-9][0-9][0-9]", "")
-					if escapeCount > 15 then
-						table.insert(findings, {
-							Severity = "Medium",
-							Title = string.format("Obfuscated Code in '%s'", scr.Name),
-							Description = string.format("High count of decimal escape sequences (%d found). Path: %s", escapeCount, getPath(scr)),
-							Object = scr
-						})
-					end
+						-- Check loadstring
+						if source:match("[^%w_]loadstring%s*%(") then
+							table.insert(findings, {
+								Severity = "Medium",
+								Title = string.format("Dynamic Code (loadstring) in '%s'", scr.Name),
+								Description = "Script uses loadstring which executes dynamic unverified code. Path: " .. getPath(scr),
+								Object = scr
+							})
+						end
 
-					-- Check suspicious webhook urls
-					if source:find("discord.com/api/webhooks", 1, true) or source:find("discordapp.com/api/webhooks", 1, true) then
-						table.insert(findings, {
-							Severity = "Medium",
-							Title = string.format("Discord Webhook in '%s'", scr.Name),
-							Description = "Script leaks communications or sends data to Discord. Path: " .. getPath(scr),
-							Object = scr
-						})
+						-- Check obfuscation (high density of decimal escapes)
+						local _, escapeCount = source:gsub("\\[0-9][0-9][0-9]", "")
+						if escapeCount > 15 then
+							table.insert(findings, {
+								Severity = "Medium",
+								Title = string.format("Obfuscated Code in '%s'", scr.Name),
+								Description = string.format("High count of decimal escape sequences (%d found). Path: %s", escapeCount, getPath(scr)),
+								Object = scr
+							})
+						end
+
+						-- Check suspicious webhook urls
+						if source:find("discord.com/api/webhooks", 1, true) or source:find("discordapp.com/api/webhooks", 1, true) then
+							table.insert(findings, {
+								Severity = "Medium",
+								Title = string.format("Discord Webhook in '%s'", scr.Name),
+								Description = "Script leaks communications or sends data to Discord. Path: " .. getPath(scr),
+								Object = scr
+							})
+						end
 					end
 				end
 

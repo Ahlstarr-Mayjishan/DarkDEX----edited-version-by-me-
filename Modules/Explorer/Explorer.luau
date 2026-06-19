@@ -1146,6 +1146,7 @@ local function main()
 			context:AddRegistered("VIEW_DEPENDENCY_GRAPH", #sList ~= 1 or not presentClasses.isViableDecompileScript or not DependencyGraph)
 			context:AddRegistered("DUMP_FUNCTIONS", not presentClasses.isViableDecompileScript or env.getupvalues == nil or env.getconstants == nil)
 			context:AddRegistered("SAVE_SCRIPT", not presentClasses.isViableDecompileScript or not env.isdecompile or env.writefile == nil)
+			context:AddRegistered("SYNC_TO_IDE", not presentClasses.isViableDecompileScript)
 			context:AddRegistered("SAVE_BYTECODE", not presentClasses.isViableDecompileScript or env.getscriptbytecode == nil or env.writefile == nil)
 
 		end
@@ -1896,6 +1897,23 @@ local function main()
 
 					task.wait(0.2)
 				end
+			end
+		end})
+
+		context:Register("SYNC_TO_IDE",{Name = "Sync Script to IDE", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
+			local idesync = Apps.IDESync
+			if idesync then
+				local list = {}
+				for _, v in ipairs(selection.List) do
+					if v.Obj then
+						table.insert(list, v.Obj)
+					end
+				end
+				if #list > 0 then
+					idesync.ExportWorkspace(list)
+				end
+			else
+				warn("IDE Sync app not loaded.")
 			end
 		end})
 

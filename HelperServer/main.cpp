@@ -516,6 +516,59 @@ bool launch_native_dashboard() {
     return true;
 }
 
+std::wstring to_wstring(const std::string& str) {
+    return std::wstring(str.begin(), str.end());
+}
+
+std::string to_string(const std::wstring& wstr) {
+    return std::string(wstr.begin(), wstr.end());
+}
+
+void create_directories_for_file(const std::wstring& file_path) {
+    size_t pos = 0;
+    while ((pos = file_path.find(L'\\', pos)) != std::wstring::npos) {
+        if (pos > 0) {
+            std::wstring dir = file_path.substr(0, pos);
+            CreateDirectoryW(dir.c_str(), NULL);
+        }
+        pos += 1;
+    }
+}
+
+struct FileInfo {
+    std::string relative_path;
+    unsigned long long last_write_time = 0;
+};
+
+void scan_directory_recursive(const std::wstring& base_dir, const std::wstring& current_subdir, std::vector<FileInfo>& files) {
+    std::wstring search_path = base_dir + L"\\" + (current_subdir.empty() ? L"" : current_subdir + L"\\") + L"*";
+    WIN32_FIND_DATAW find_data;
+    HANDLE find_handle = FindFirstFileW(search_path.c_str(), &find_data);
+    if (find_handle == INVALID_HANDLE_VALUE) return;
+    
+    do {
+        std::wstring file_name = find_data.cFileName;
+        if (file_name == L"." || file_name == L"..") continue;
+        
+        std::wstring relative_file = current_subdir.empty() ? file_name : current_subdir + L"\\" + file_name;
+        
+        if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            scan_directory_recursive(base_dir, relative_file, files);
+        } else {
+            ULARGE_INTEGER ft;
+            ft.LowPart = find_data.ftLastWriteTime.dwLowDateTime;
+            ft.HighPart = find_data.ftLastWriteTime.dwHighDateTime;
+            
+            // Convert relative path to std::string
+            std::string rel_str(relative_file.begin(), relative_file.end());
+            files.push_back({rel_str, ft.QuadPart});
+        }
+    } while (FindNextFileW(find_handle, &find_data));
+    
+    FindClose(find_handle);
+}
+
+
 // Fast C++ linear-time variable normalizer. This is a source cleanup pass, not a full deobfuscator.
 std::string normalize_source(const std::string& source) {
     std::unordered_map<std::string, std::string> var_map;
@@ -2202,6 +2255,95 @@ void handle_client(SOCKET ClientSocket) {
             send_response(ClientSocket, 200, "OK", assign_role(body));
         } else if (path == "/decompile" && method == "POST") {
             send_response(ClientSocket, 200, "OK", decompile_bytecode(body));
+        } else if (path == "/sync-to-disk" && method == "POST") {
+            auto parts = split_header_payload(body, 1);
+            if (parts.size() != 2 || parts[0].empty()) {
+                send_response(ClientSocket, 400, "Bad Request", "{\"ok\":false,\"error\":\"invalid payload\"}", "application/json");
+                close_client(ClientSocket);
+                return;
+            }
+            
+            std::string script_path = parts[0];
+            std::string source_code = parts[1];
+            
+            std::string local_rel = "workspace_sync\\";
+            for (char c : script_path) {
+                if (c == '.') {
+                    local_rel += '\\';
+                } else {
+                    local_rel += c;
+                }
+            }
+            local_rel += ".luau";
+            
+            std::wstring w_path = to_wstring(local_rel);
+            create_directories_for_file(w_path);
+            
+            std::ofstream out(w_path.c_str(), std::ios::binary | std::ios::trunc);
+            if (out.is_open()) {
+                out.write(source_code.data(), source_code.size());
+                out.close();
+                send_response(ClientSocket, 200, "OK", "{\"ok\":true}", "application/json");
+            } else {
+                send_response(ClientSocket, 500, "Internal Error", "{\"ok\":false,\"error\":\"could not open file for writing\"}", "application/json");
+            }
+        } else if (path == "/sync-poll" && method == "POST") {
+            unsigned long long client_time = 0;
+            try {
+                client_time = std::stoull(body);
+            } catch (...) {
+                client_time = 0;
+            }
+            
+            CreateDirectoryW(L"workspace_sync", NULL);
+            std::vector<FileInfo> files;
+            scan_directory_recursive(L"workspace_sync", L"", files);
+            
+            std::stringstream json;
+            json << "{\"ok\":true,\"files\":[";
+            bool first_file = true;
+            for (const auto& file : files) {
+                if (file.last_write_time > client_time) {
+                    std::wstring full_w = L"workspace_sync\\" + to_wstring(file.relative_path);
+                    std::ifstream in(full_w.c_str(), std::ios::binary);
+                    std::string src = "";
+                    if (in.is_open()) {
+                        std::stringstream buffer;
+                        buffer << in.rdbuf();
+                        src = buffer.str();
+                        in.close();
+                    }
+                    
+                    std::string script_path = "";
+                    std::string rel = file.relative_path;
+                    if (rel.size() > 5 && rel.substr(rel.size() - 5) == ".luau") {
+                        rel = rel.substr(0, rel.size() - 5);
+                    }
+                    for (char c : rel) {
+                        if (c == '\\') {
+                            script_path += '.';
+                        } else {
+                            script_path += c;
+                        }
+                    }
+                    
+                    if (!first_file) json << ",";
+                    first_file = false;
+                    
+                    json << "{\"path\":\"" << escape_json(script_path) << "\","
+                         << "\"source\":\"" << escape_json(src) << "\","
+                         << "\"timestamp\":" << file.last_write_time << "}";
+                }
+            }
+            
+            FILETIME current_ft;
+            GetSystemTimeAsFileTime(&current_ft);
+            ULARGE_INTEGER current_ui;
+            current_ui.LowPart = current_ft.dwLowDateTime;
+            current_ui.HighPart = current_ft.dwHighDateTime;
+            
+            json << "],\"timestamp\":" << current_ui.QuadPart << "}";
+            send_response(ClientSocket, 200, "OK", json.str(), "application/json");
         } else {
             send_response(ClientSocket, 404, "Not Found", "404 Route Not Found");
         }

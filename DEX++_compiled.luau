@@ -9954,6 +9954,7 @@ end,
     			context:AddRegistered("VIEW_DEPENDENCY_GRAPH", #sList ~= 1 or not presentClasses.isViableDecompileScript or not DependencyGraph)
     			context:AddRegistered("DUMP_FUNCTIONS", not presentClasses.isViableDecompileScript or env.getupvalues == nil or env.getconstants == nil)
     			context:AddRegistered("SAVE_SCRIPT", not presentClasses.isViableDecompileScript or not env.isdecompile or env.writefile == nil)
+    			context:AddRegistered("SYNC_TO_IDE", not presentClasses.isViableDecompileScript)
     			context:AddRegistered("SAVE_BYTECODE", not presentClasses.isViableDecompileScript or env.getscriptbytecode == nil or env.writefile == nil)
     
     		end
@@ -10704,6 +10705,23 @@ end,
     
     					task.wait(0.2)
     				end
+    			end
+    		end})
+    
+    		context:Register("SYNC_TO_IDE",{Name = "Sync Script to IDE", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
+    			local idesync = Apps.IDESync
+    			if idesync then
+    				local list = {}
+    				for _, v in ipairs(selection.List) do
+    					if v.Obj then
+    						table.insert(list, v.Obj)
+    					end
+    				end
+    				if #list > 0 then
+    					idesync.ExportWorkspace(list)
+    				end
+    			else
+    				warn("IDE Sync app not loaded.")
     			end
     		end})
     
@@ -20815,46 +20833,84 @@ end,
     				-- Run decompile safely
     				local success, source = pcall(env.decompile, scr)
     				if success and type(source) == "string" and #source > 0 then
-    					-- Check require(number) backdoors
-    					local backdoorRequire = source:match("require%s*%(%s*%d+%s*%)")
-    					if backdoorRequire then
-    						table.insert(findings, {
-    							Severity = "High",
-    							Title = string.format("Backdoor Loader in '%s'", scr.Name),
-    							Description = string.format("Flags require(AssetId): '%s'. Path: %s", backdoorRequire, getPath(scr)),
-    							Object = scr
-    						})
+    					local analyzedViaHelper = false
+    
+    					-- Try helper AST deep analysis
+    					local req = env.request or (syn and syn.request) or (http and http.request) or http_request or request
+    					if req then
+    						local okReq, result = pcall(function()
+    							return req({
+    								Url = "http://localhost:8080/analyze-source-deep",
+    								Method = "POST",
+    								Headers = {
+    									["Content-Type"] = "text/plain"
+    								},
+    								Body = source
+    							})
+    						end)
+    
+    						if okReq and result and result.StatusCode == 200 then
+    							local okDecode, data = pcall(function()
+    								return service.HttpService:JSONDecode(result.Body)
+    							end)
+    
+    							if okDecode and data and data.findings then
+    								analyzedViaHelper = true
+    								for _, finding in ipairs(data.findings) do
+    									table.insert(findings, {
+    										Severity = finding.severity or "Medium",
+    										Title = string.format("%s in '%s'", finding.title or "Security finding", scr.Name),
+    										Description = string.format("[Line %d] %s. Path: %s", finding.line or 0, finding.description or "", getPath(scr)),
+    										Object = scr
+    									})
+    								end
+    							end
+    						end
     					end
     
-    					-- Check loadstring
-    					if source:match("[^%w_]loadstring%s*%(") then
-    						table.insert(findings, {
-    							Severity = "Medium",
-    							Title = string.format("Dynamic Code (loadstring) in '%s'", scr.Name),
-    							Description = "Script uses loadstring which executes dynamic unverified code. Path: " .. getPath(scr),
-    							Object = scr
-    						})
-    					end
+    					-- Fallback to regex checks if helper analysis was unavailable
+    					if not analyzedViaHelper then
+    						-- Check require(number) backdoors
+    						local backdoorRequire = source:match("require%s*%(%s*%d+%s*%)")
+    						if backdoorRequire then
+    							table.insert(findings, {
+    								Severity = "High",
+    								Title = string.format("Backdoor Loader in '%s'", scr.Name),
+    								Description = string.format("Flags require(AssetId): '%s'. Path: %s", backdoorRequire, getPath(scr)),
+    								Object = scr
+    							})
+    						end
     
-    					-- Check obfuscation (high density of decimal escapes)
-    					local _, escapeCount = source:gsub("\\[0-9][0-9][0-9]", "")
-    					if escapeCount > 15 then
-    						table.insert(findings, {
-    							Severity = "Medium",
-    							Title = string.format("Obfuscated Code in '%s'", scr.Name),
-    							Description = string.format("High count of decimal escape sequences (%d found). Path: %s", escapeCount, getPath(scr)),
-    							Object = scr
-    						})
-    					end
+    						-- Check loadstring
+    						if source:match("[^%w_]loadstring%s*%(") then
+    							table.insert(findings, {
+    								Severity = "Medium",
+    								Title = string.format("Dynamic Code (loadstring) in '%s'", scr.Name),
+    								Description = "Script uses loadstring which executes dynamic unverified code. Path: " .. getPath(scr),
+    								Object = scr
+    							})
+    						end
     
-    					-- Check suspicious webhook urls
-    					if source:find("discord.com/api/webhooks", 1, true) or source:find("discordapp.com/api/webhooks", 1, true) then
-    						table.insert(findings, {
-    							Severity = "Medium",
-    							Title = string.format("Discord Webhook in '%s'", scr.Name),
-    							Description = "Script leaks communications or sends data to Discord. Path: " .. getPath(scr),
-    							Object = scr
-    						})
+    						-- Check obfuscation (high density of decimal escapes)
+    						local _, escapeCount = source:gsub("\\[0-9][0-9][0-9]", "")
+    						if escapeCount > 15 then
+    							table.insert(findings, {
+    								Severity = "Medium",
+    								Title = string.format("Obfuscated Code in '%s'", scr.Name),
+    								Description = string.format("High count of decimal escape sequences (%d found). Path: %s", escapeCount, getPath(scr)),
+    								Object = scr
+    							})
+    						end
+    
+    						-- Check suspicious webhook urls
+    						if source:find("discord.com/api/webhooks", 1, true) or source:find("discordapp.com/api/webhooks", 1, true) then
+    							table.insert(findings, {
+    								Severity = "Medium",
+    								Title = string.format("Discord Webhook in '%s'", scr.Name),
+    								Description = "Script leaks communications or sends data to Discord. Path: " .. getPath(scr),
+    								Object = scr
+    							})
+    						end
     					end
     				end
     
@@ -23108,12 +23164,338 @@ end,
     	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
     end
 end,
+["IDESync"] = function()
+    --!nocheck
+    
+    local main_ref, lib_ref, apps_ref, settings_ref, env_ref, theme_ref
+    
+    local function initDeps(data)
+    	main_ref = data.Main
+    	lib_ref = data.Lib
+    	apps_ref = data.Apps
+    	settings_ref = data.Settings
+    	env_ref = data.env
+    end
+    
+    local function initAfterMain(t)
+    	theme_ref = t.Theme
+    end
+    
+    local function env_func(name)
+    	local env = env_ref
+    	if env and type(env[name]) == "function" then
+    		return env[name]
+    	end
+    	if type(getfenv) == "function" then
+    		local ok, value = pcall(function()
+    			return getfenv()[name]
+    		end)
+    		if ok and type(value) == "function" then
+    			return value
+    		end
+    	end
+    	return nil
+    end
+    
+    local function locateInstanceByPath(path)
+    	local parts = {}
+    	for part in path:gmatch("[^%.]+") do
+    		table.insert(parts, part)
+    	end
+    	if parts[1] ~= "game" then return nil end
+    
+    	local current = game
+    	for i = 2, #parts do
+    		local name = parts[i]
+    		local nextObj = current:FindFirstChild(name)
+    		if not nextObj then
+    			return nil
+    		end
+    		current = nextObj
+    	end
+    	return current
+    end
+    
+    local function getRequestFunc()
+    	return env_func("request") or (syn and syn.request) or (http and http.request) or http_request or request
+    end
+    
+    local function postToHelper(endpoint, body)
+    	local req = getRequestFunc()
+    	if not req then return false, "Request API not available" end
+    	local success, res = pcall(req, {
+    		Url = "http://localhost:8080" .. endpoint,
+    		Method = "POST",
+    		Headers = { ["Content-Type"] = "text/plain" },
+    		Body = body
+    	})
+    	if success and res and res.StatusCode == 200 then
+    		return true, res.Body
+    	end
+    	return false, res and tostring(res.StatusCode) or tostring(res)
+    end
+    
+    local syncActive = false
+    local lastPollTimestamp = 0
+    
+    local function startSync(status_callback)
+    	if syncActive then return end
+    	syncActive = true
+    	lastPollTimestamp = 0
+    	
+    	task.spawn(function()
+    		local service = game:GetService("HttpService")
+    		while syncActive do
+    			local success, body = postToHelper("/sync-poll", tostring(lastPollTimestamp))
+    			if success and body then
+    				local ok, data = pcall(service.JSONDecode, service, body)
+    				if ok and data and data.ok then
+    					lastPollTimestamp = data.timestamp or lastPollTimestamp
+    					local count = 0
+    					for _, file in ipairs(data.files or {}) do
+    						local scriptObj = locateInstanceByPath(file.path)
+    						if scriptObj and (scriptObj.ClassName == "LocalScript" or scriptObj.ClassName == "ModuleScript" or scriptObj.ClassName == "Script") then
+    							scriptObj.Source = file.source
+    							count = count + 1
+    						end
+    					end
+    					if count > 0 and status_callback then
+    						status_callback("Synced " .. tostring(count) .. " script(s) from IDE.")
+    					end
+    				end
+    			end
+    			task.wait(1)
+    		end
+    	end)
+    end
+    
+    local function stopSync()
+    	syncActive = false
+    end
+    
+    local function exportScript(scriptObj, status_callback)
+    	local path = scriptObj:GetFullName()
+    	local source = ""
+    	local decompile_fn = env_func("decompile")
+    	if decompile_fn then
+    		local ok, err = pcall(function()
+    			source = decompile_fn(scriptObj)
+    		end)
+    		if not ok then
+    			source = "-- Decompile failed: " .. tostring(err)
+    		end
+    	else
+    		source = scriptObj.Source or "-- Source reading failed: executor does not support decompile or script.Source read"
+    	end
+    	
+    	local success, err = postToHelper("/sync-to-disk", path .. "\n" .. source)
+    	if success then
+    		if status_callback then
+    			status_callback("Exported " .. scriptObj.Name)
+    		end
+    	else
+    		if status_callback then
+    			status_callback("Failed to export " .. scriptObj.Name .. ": " .. tostring(err))
+    		end
+    	end
+    end
+    
+    local function exportWorkspace(targets, status_callback)
+    	task.spawn(function()
+    		local scripts = {}
+    		for _, target in ipairs(targets) do
+    			if target:IsA("LuaSourceContainer") then
+    				table.insert(scripts, target)
+    			end
+    			for _, desc in ipairs(target:GetDescendants()) do
+    				if desc:IsA("LuaSourceContainer") then
+    					table.insert(scripts, desc)
+    				end
+    			end
+    		end
+    		
+    		if #scripts == 0 then
+    			if status_callback then
+    				status_callback("No scripts found in selection.")
+    			end
+    			return
+    		end
+    		
+    		if status_callback then
+    			status_callback("Exporting " .. tostring(#scripts) .. " script(s) to workspace_sync/...")
+    		end
+    		
+    		for i, scr in ipairs(scripts) do
+    			exportScript(scr, status_callback)
+    			if i % 10 == 0 then
+    				task.wait(0.1) -- yield to avoid freezing Roblox during bulk export
+    			end
+    		end
+    		
+    		if status_callback then
+    			status_callback("Workspace export completed.")
+    		end
+    	end)
+    end
+    
+    local function main()
+    	local IDESync = {}
+    	local window, statusLabel, startBtn, stopBtn, exportBtn
+    
+    	local function theme()
+    		return settings_ref.Theme
+    	end
+    
+    	local function setStatus(text)
+    		if statusLabel then
+    			statusLabel.Text = tostring(text)
+    		end
+    	end
+    
+    	local function button(parent, text, pos, size, callback)
+    		local b = Instance.new("TextButton")
+    		b.AutoButtonColor = false
+    		b.BackgroundColor3 = theme().Button
+    		b.BorderColor3 = theme().Outline2
+    		b.Font = Enum.Font.SourceSans
+    		b.Position = pos
+    		b.Size = size
+    		b.Text = text
+    		b.TextColor3 = theme().Text
+    		b.TextSize = 13
+    		b.Parent = parent
+    		b.MouseButton1Click:Connect(callback)
+    		if theme_ref and theme_ref.StyleButton then
+    			theme_ref.StyleButton(b)
+    		elseif lib_ref and lib_ref.ButtonAnim then
+    			lib_ref.ButtonAnim(b, {
+    				Mode = 2,
+    				StartColor = theme().Button,
+    				HoverColor = theme().ButtonHover,
+    				PressColor = theme().ButtonPress,
+    				OutlineColor = theme().Outline2,
+    			})
+    		end
+    		return b
+    	end
+    
+    	local function label(parent, text, pos, size, color, bold)
+    		local l = Instance.new("TextLabel")
+    		l.BackgroundTransparency = 1
+    		l.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+    		l.Position = pos
+    		l.Size = size
+    		l.Text = text
+    		l.TextColor3 = color or theme().Text
+    		l.TextSize = bold and 14 or 13
+    		l.TextWrapped = true
+    		l.TextXAlignment = Enum.TextXAlignment.Left
+    		l.TextYAlignment = Enum.TextYAlignment.Center
+    		l.Parent = parent
+    		return l
+    	end
+    
+    	local function updateButtons()
+    		if syncActive then
+    			startBtn.Visible = false
+    			stopBtn.Visible = true
+    			setStatus("Live Sync is ACTIVE (IDE -> Roblox)")
+    		else
+    			startBtn.Visible = true
+    			stopBtn.Visible = false
+    			setStatus("Ready. Live Sync is INACTIVE.")
+    		end
+    	end
+    
+    	IDESync.StartSync = function()
+    		startSync(setStatus)
+    		updateButtons()
+    	end
+    
+    	IDESync.StopSync = function()
+    		stopSync()
+    		updateButtons()
+    	end
+    
+    	IDESync.ExportWorkspace = function()
+    		local explorer = apps_ref and apps_ref.Explorer
+    		local selection = explorer and explorer.Selection
+    		local targets = selection and selection:GetSelected()
+    		if not targets or #targets == 0 then
+    			setStatus("Error: Select target instances in Explorer first.")
+    			return
+    		end
+    		
+    		-- extract standard objects from Explorer nodes
+    		local list = {}
+    		for _, node in ipairs(targets) do
+    			if typeof(node) == "table" and node.Obj then
+    				table.insert(list, node.Obj)
+    			elseif typeof(node) == "Instance" then
+    				table.insert(list, node)
+    			end
+    		end
+    
+    		exportWorkspace(list, setStatus)
+    	end
+    
+    	IDESync.IsSyncActive = function()
+    		return syncActive
+    	end
+    
+    	IDESync.Init = function()
+    		window = lib_ref.Window.new()
+    		window:SetTitle("IDE Sync")
+    		window:Resize(320, 200)
+    		IDESync.Window = window
+    
+    		local content = window.GuiElems.Content
+    		local t = theme()
+    
+    		local title = label(content, "IDE / Workspace Synchronizer", UDim2.new(0, 12, 0, 10), UDim2.new(1, -24, 0, 20), t.Text, true)
+    		local desc = label(content, "Sync Roblox scripts to/from local workspace_sync/ folder via C++ Helper on port 8080.", UDim2.new(0, 12, 0, 30), UDim2.new(1, -24, 0, 36), t.PlaceholderText, false)
+    		desc.TextSize = 11
+    
+    		startBtn = button(content, "Start Live Sync", UDim2.new(0, 12, 0, 78), UDim2.new(1, -24, 0, 28), function()
+    			IDESync.StartSync()
+    		end)
+    
+    		stopBtn = button(content, "Stop Live Sync", UDim2.new(0, 12, 0, 78), UDim2.new(1, -24, 0, 28), function()
+    			IDESync.StopSync()
+    		end)
+    		stopBtn.Visible = false
+    
+    		exportBtn = button(content, "Export Selection to Disk", UDim2.new(0, 12, 0, 114), UDim2.new(1, -24, 0, 28), function()
+    			IDESync.ExportWorkspace()
+    		end)
+    
+    		local footer = Instance.new("Frame")
+    		footer.BackgroundColor3 = t.Menu
+    		footer.BorderSizePixel = 0
+    		footer.Position = UDim2.new(0, 0, 1, -32)
+    		footer.Size = UDim2.new(1, 0, 0, 32)
+    		footer.Parent = content
+    
+    		statusLabel = label(footer, "Ready. Select scripts in Explorer and export them.", UDim2.new(0, 10, 0, 7), UDim2.new(1, -20, 0, 18), t.PlaceholderText, false)
+    
+    		updateButtons()
+    	end
+    
+    	return IDESync
+    end
+    
+    if gethsfuncs then
+    	_G.moduleData = {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    else
+    	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+    end
+end,
 }
 
 local isFsSupported = readfile and writefile and isfile and isfolder and listfiles and delfile and delfolder
 
 -- Main vars
-local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
+local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
 local API, RMD
 
 -- Default Settings
@@ -23326,6 +23708,9 @@ Main = (function()
 		["Property Tracker"] = "Advanced",
 		["Thread Manager"] = "Advanced",
 		["Serialize Inst"] = "Advanced",
+		["Memory Forensics"] = "Advanced",
+		["Runtime Debugger"] = "Advanced",
+		["IDE Sync"] = "Advanced",
 	}
 
 	local currentCategory = "All"
@@ -23568,7 +23953,7 @@ Main = (function()
 		end
 	end
 
-	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub"}
+	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
 	Main.ModulePathMap = {
 		Theme = "Core/Theme",
 		Lib = "Core/Lib",
@@ -23599,6 +23984,7 @@ Main = (function()
 		RemoteFuzzer = "Runtime/RemoteFuzzer",
 		ClientIntelligence = "Runtime/ClientIntelligence",
 		InspectorHub = "Runtime/InspectorHub",
+		IDESync = "Tools/IDESync",
 	}
 	Main.Elevated = false
 	Main.AllowDraggableOnMobile = true
@@ -24019,6 +24405,7 @@ Main = (function()
 		PropertyTracker = Apps.PropertyTracker
 		InstanceSerializer = Apps.InstanceSerializer
 		ThreadManager = Apps.ThreadManager
+		IDESync = Apps.IDESync
 
 
 		--SecretServicePanel = Apps.SecretServicePanel
@@ -24051,7 +24438,8 @@ Main = (function()
 			RemoteFuzzer = RemoteFuzzer,
 			PropertyTracker = PropertyTracker,
 			InstanceSerializer = InstanceSerializer,
-			ThreadManager = ThreadManager
+			ThreadManager = ThreadManager,
+			IDESync = IDESync
 		}
 
 		Main.AppControls.Lib.InitAfterMain(appTable)
@@ -26499,6 +26887,7 @@ Main = (function()
 		Main.CreateLazyWindowApp({Name = "Security Auditor", IconMap = Main.LargeIcons, Icon = "Watcher", Module = SecurityAuditor, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Property Tracker", IconMap = Main.LargeIcons, Icon = "Watcher", Module = PropertyTracker, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Thread Manager", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = ThreadManager, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "IDE Sync", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = IDESync})
 		Main.CreateApp({Name = "Serialize Inst", IconMap = Main.LargeIcons, Icon = "Object", OnClick = function(callback)
 			if callback then
 				if InstanceSerializer then InstanceSerializer.Init() end
@@ -28161,6 +28550,748 @@ return {
 	PluginData    = plugin_data,
 }
 ]],
+	["MemoryForensics.lua"] = [[
+--!nocheck
+
+local main_ref, lib_ref, apps_ref, settings_ref, env_ref, theme_ref
+
+local plugin_data = {
+	Name = "MemoryForensics",
+	FriendlyName = "Memory Forensics",
+}
+
+local function initDeps(data)
+	main_ref = data.Main
+	lib_ref = data.Lib
+	apps_ref = data.Apps
+	settings_ref = data.Settings
+	env_ref = data.env
+end
+
+local function initAfterMain(t)
+	theme_ref = t.Theme
+end
+
+local function env_func(name)
+	local env = env_ref
+	if env and type(env[name]) == "function" then
+		return env[name]
+	end
+	if type(getfenv) == "function" then
+		local ok, value = pcall(function()
+			return getfenv()[name]
+		end)
+		if ok and type(value) == "function" then
+			return value
+		end
+	end
+	return nil
+end
+
+local function get_upvalues_safe(func)
+	local getupvalues_fn = env_func("getupvalues") or (debug and debug.getupvalues)
+	if getupvalues_fn then
+		local ok, tbl = pcall(getupvalues_fn, func)
+		if ok and type(tbl) == "table" then
+			return tbl
+		end
+	end
+
+	local getupval = env_func("getupvalue") or (debug and debug.getupvalue)
+	if getupval then
+		local tbl = {}
+		for i = 1, 200 do
+			local ok, name, val = pcall(getupval, func, i)
+			if ok and name then
+				tbl[name] = val
+			else
+				break
+			end
+		end
+		return tbl
+	end
+	return {}
+end
+
+local function set_upvalue_safe(func, name_or_idx, val)
+	local setupval = env_func("setupvalue") or (debug and debug.setupvalue)
+	if setupval then
+		local ok, err = pcall(setupval, func, name_or_idx, val)
+		return ok, err
+	end
+	return false, "setupvalue API not available"
+end
+
+local function main()
+	local forensics = {}
+	forensics.PluginData = plugin_data
+
+	local window, status_label
+	local active_tab = "gc" -- "gc" or "connections"
+	
+	-- UI Elements
+	local tab_gc_btn, tab_conn_btn
+	local gc_panel, conn_panel
+	
+	-- GC Panel UI Elements
+	local gc_query_box, gc_scroll
+	local gc_results = {}
+	local gc_rows = {}
+	
+	-- Connection Panel UI Elements
+	local conn_target_label, conn_event_box, conn_scroll
+	local conn_results = {}
+	local conn_rows = {}
+	local selected_instance = nil
+	
+	-- Detail Inspector (Right Panel)
+	local inspector_frame, inspector_title, inspector_scroll
+	local inspector_rows = {}
+
+	local function theme()
+		return settings_ref.Theme
+	end
+
+	local function set_status(text)
+		if status_label then
+			status_label.Text = tostring(text)
+		end
+	end
+
+	local function label(parent, text, pos, size, color, bold)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+		l.Position = pos
+		l.Size = size
+		l.Text = text
+		l.TextColor3 = color or theme().Text
+		l.TextSize = bold and 14 or 13
+		l.TextWrapped = true
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextYAlignment = Enum.TextYAlignment.Center
+		l.Parent = parent
+		return l
+	end
+
+	local function button(parent, text, pos, size, callback)
+		local b = Instance.new("TextButton")
+		b.AutoButtonColor = false
+		b.BackgroundColor3 = theme().Button
+		b.BorderColor3 = theme().Outline2
+		b.Font = Enum.Font.SourceSans
+		b.Position = pos
+		b.Size = size
+		b.Text = text
+		b.TextColor3 = theme().Text
+		b.TextSize = 13
+		b.Parent = parent
+		b.MouseButton1Click:Connect(callback)
+		if theme_ref and theme_ref.StyleButton then
+			theme_ref.StyleButton(b)
+		elseif lib_ref and lib_ref.ButtonAnim then
+			lib_ref.ButtonAnim(b, {
+				Mode = 2,
+				StartColor = theme().Button,
+				HoverColor = theme().ButtonHover,
+				PressColor = theme().ButtonPress,
+				OutlineColor = theme().Outline2,
+			})
+		end
+		return b
+	end
+
+	local function clear_gc_rows()
+		for _, row in ipairs(gc_rows) do
+			row:Destroy()
+		end
+		gc_rows = {}
+	end
+
+	local function clear_conn_rows()
+		for _, row in ipairs(conn_rows) do
+			row:Destroy()
+		end
+		conn_rows = {}
+	end
+
+	local function clear_inspector_rows()
+		for _, row in ipairs(inspector_rows) do
+			row:Destroy()
+		end
+		inspector_rows = {}
+	end
+
+	local function inspect_function(entry)
+		clear_inspector_rows()
+		inspector_title.Text = "Inspect: " .. entry.Name .. "()"
+		
+		-- Fetch Upvalues
+		local upvalues = get_upvalues_safe(entry.Object)
+		local y = 4
+		
+		-- Display Metadata
+		local meta_label = label(inspector_scroll, "Source: " .. entry.Source .. "\nLine: " .. tostring(entry.Line), UDim2.new(0, 6, 0, y), UDim2.new(1, -12, 0, 36), theme().PlaceholderText, false)
+		meta_label.TextYAlignment = Enum.TextYAlignment.Top
+		inspector_rows[#inspector_rows + 1] = meta_label
+		y += 42
+		
+		-- Display Upvalues
+		local up_title = label(inspector_scroll, "Upvalues:", UDim2.new(0, 6, 0, y), UDim2.new(1, -12, 0, 18), theme().Text, true)
+		inspector_rows[#inspector_rows + 1] = up_title
+		y += 22
+		
+		local count = 0
+		for name, val in pairs(upvalues) do
+			count += 1
+			local val_str = tostring(val)
+			if type(val) == "string" then
+				val_str = '"' .. val_str .. '"'
+			end
+			
+			local row = Instance.new("Frame")
+			row.BackgroundColor3 = theme().Main1
+			row.BorderColor3 = theme().Outline1
+			row.Position = UDim2.new(0, 6, 0, y)
+			row.Size = UDim2.new(1, -12, 0, 48)
+			row.Parent = inspector_scroll
+			inspector_rows[#inspector_rows + 1] = row
+			
+			label(row, tostring(name) .. " (" .. type(val) .. ")", UDim2.new(0, 6, 0, 4), UDim2.new(1, -84, 0, 16), theme().Highlight, true)
+			
+			local val_box = Instance.new("TextBox")
+			val_box.BackgroundColor3 = theme().TextBox
+			val_box.BorderColor3 = theme().Outline3
+			val_box.ClearTextOnFocus = false
+			val_box.Font = Enum.Font.Code
+			val_box.Position = UDim2.new(0, 6, 0, 22)
+			val_box.Size = UDim2.new(1, -84, 0, 20)
+			val_box.Text = val_str
+			val_box.TextColor3 = theme().Text
+			val_box.TextSize = 11
+			val_box.TextXAlignment = Enum.TextXAlignment.Left
+			val_box.Parent = row
+			
+			button(row, "Set", UDim2.new(1, -72, 0, 20), UDim2.new(0, 64, 0, 22), function()
+				local text = val_box.Text
+				local compile_fn, err = loadstring("return " .. text)
+				if not compile_fn then
+					set_status("Compile error: " .. tostring(err))
+					return
+				end
+				local success, new_val = pcall(compile_fn)
+				if not success then
+					set_status("Evaluation error: " .. tostring(new_val))
+					return
+				end
+				local ok, set_err = set_upvalue_safe(entry.Object, name, new_val)
+				if ok then
+					set_status("Set upvalue " .. tostring(name) .. " successfully.")
+					inspect_function(entry)
+				else
+					set_status("Failed to set: " .. tostring(set_err))
+				end
+			end)
+			
+			y += 52
+		end
+		
+		if count == 0 then
+			local no_up = label(inspector_scroll, "No upvalues found.", UDim2.new(0, 12, 0, y), UDim2.new(1, -24, 0, 18), theme().PlaceholderText, false)
+			inspector_rows[#inspector_rows + 1] = no_up
+			y += 22
+		end
+		
+		inspector_scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+	end
+
+	local function inspect_table(entry)
+		clear_inspector_rows()
+		inspector_title.Text = "Inspect: Table"
+		
+		local y = 4
+		local count = 0
+		for k, v in pairs(entry.Object) do
+			count += 1
+			if count > 100 then
+				local cap = label(inspector_scroll, "... (truncated after 100 entries)", UDim2.new(0, 6, 0, y), UDim2.new(1, -12, 0, 18), theme().PlaceholderText, false)
+				inspector_rows[#inspector_rows + 1] = cap
+				y += 22
+				break
+			end
+			
+			local row = Instance.new("Frame")
+			row.BackgroundColor3 = theme().Main1
+			row.BorderColor3 = theme().Outline1
+			row.Position = UDim2.new(0, 6, 0, y)
+			row.Size = UDim2.new(1, -12, 0, 38)
+			row.Parent = inspector_scroll
+			inspector_rows[#inspector_rows + 1] = row
+			
+			local k_str = tostring(k)
+			local v_str = tostring(v)
+			if type(v) == "string" then v_str = '"' .. v_str .. '"' end
+			
+			label(row, k_str .. "  =", UDim2.new(0, 6, 0, 2), UDim2.new(0.4, -12, 1, -4), theme().Highlight, true).TextTruncate = Enum.TextTruncate.AtEnd
+			
+			local val_box = Instance.new("TextBox")
+			val_box.BackgroundColor3 = theme().TextBox
+			val_box.BorderColor3 = theme().Outline3
+			val_box.ClearTextOnFocus = false
+			val_box.Font = Enum.Font.Code
+			val_box.Position = UDim2.new(0.4, 0, 0, 8)
+			val_box.Size = UDim2.new(0.6, -56, 0, 22)
+			val_box.Text = v_str
+			val_box.TextColor3 = theme().Text
+			val_box.TextSize = 11
+			val_box.TextXAlignment = Enum.TextXAlignment.Left
+			val_box.Parent = row
+			
+			button(row, "Set", UDim2.new(1, -48, 0, 8), UDim2.new(0, 42, 0, 22), function()
+				local text = val_box.Text
+				local compile_fn, err = loadstring("return " .. text)
+				if not compile_fn then
+					set_status("Compile error: " .. tostring(err))
+					return
+				end
+				local success, new_val = pcall(compile_fn)
+				if not success then
+					set_status("Evaluation error: " .. tostring(new_val))
+					return
+				end
+				local ok, set_err = pcall(function()
+					entry.Object[k] = new_val
+				end)
+				if ok then
+					set_status("Updated table field " .. k_str)
+					inspect_table(entry)
+				else
+					set_status("Write failed: " .. tostring(set_err))
+				end
+			end)
+			
+			y += 42
+		end
+		
+		if count == 0 then
+			local empty = label(inspector_scroll, "Empty table.", UDim2.new(0, 12, 0, y), UDim2.new(1, -24, 0, 18), theme().PlaceholderText, false)
+			inspector_rows[#inspector_rows + 1] = empty
+			y += 22
+		end
+		
+		inspector_scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+	end
+
+	local function render_gc()
+		clear_gc_rows()
+		local y = 4
+		for i, entry in ipairs(gc_results) do
+			if i > 150 then break end
+			local row = Instance.new("Frame")
+			row.BackgroundColor3 = theme().Main1
+			row.BorderColor3 = theme().Outline1
+			row.Position = UDim2.new(0, 4, 0, y)
+			row.Size = UDim2.new(1, -8, 0, 42)
+			row.Parent = gc_scroll
+			gc_rows[#gc_rows + 1] = row
+
+			if entry.Type == "function" then
+				label(row, entry.Name .. "()", UDim2.new(0, 8, 0, 2), UDim2.new(1, -88, 0, 18), theme().Text, true)
+				local src = label(row, entry.Source .. ":" .. tostring(entry.Line), UDim2.new(0, 8, 0, 20), UDim2.new(1, -88, 0, 18), theme().PlaceholderText, false)
+				src.TextTruncate = Enum.TextTruncate.AtEnd
+				
+				button(row, "Inspect", UDim2.new(1, -74, 0, 10), UDim2.new(0, 68, 0, 22), function()
+					inspect_function(entry)
+				end)
+			elseif entry.Type == "table" then
+				label(row, "Table with " .. tostring(entry.FieldsCount) .. " fields", UDim2.new(0, 8, 0, 12), UDim2.new(1, -88, 0, 18), Color3.fromRGB(34, 197, 94), true)
+				
+				button(row, "Inspect", UDim2.new(1, -74, 0, 10), UDim2.new(0, 68, 0, 22), function()
+					inspect_table(entry)
+				end)
+			elseif entry.Type == "thread" then
+				label(row, "Thread - " .. entry.Status, UDim2.new(0, 8, 0, 12), UDim2.new(1, -88, 0, 18), Color3.fromRGB(168, 85, 247), true)
+			end
+
+			y += 46
+		end
+		gc_scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+	end
+
+	local function scan_gc(kind)
+		set_status("Scanning Garbage Collector...")
+		local getgc_fn = env_func("getgc")
+		if not getgc_fn then
+			set_status("getgc API is not supported by your executor.")
+			return
+		end
+
+		local query = gc_query_box.Text
+		local ok, list = pcall(getgc_fn, true)
+		if not ok then
+			ok, list = pcall(getgc_fn)
+		end
+		if not ok or type(list) ~= "table" then
+			set_status("Failed to read Garbage Collector.")
+			return
+		end
+
+		table.clear(gc_results)
+		local q_lower = query:lower()
+
+		for _, obj in ipairs(list) do
+			if kind == "function" and type(obj) == "function" then
+				local name = "anonymous"
+				local source = "unknown"
+				local line = 0
+				
+				if debug and debug.info then
+					local s, n = pcall(debug.info, obj, "n")
+					if s and n and #n > 0 then name = n end
+					local s2, src, l = pcall(debug.info, obj, "sl")
+					if s2 then source, line = src, l end
+				end
+				
+				if #query == 0 or name:lower():find(q_lower, 1, true) or source:lower():find(q_lower, 1, true) then
+					table.insert(gc_results, {
+						Type = "function",
+						Object = obj,
+						Name = name,
+						Source = source,
+						Line = line
+					})
+				end
+			elseif kind == "table" and type(obj) == "table" then
+				local match = (#query == 0)
+				if not match then
+					for k, v in pairs(obj) do
+						if tostring(k):lower():find(q_lower, 1, true) or tostring(v):lower():find(q_lower, 1, true) then
+							match = true
+							break
+						end
+					end
+				end
+				
+				if match then
+					local fields = 0
+					for _ in pairs(obj) do fields += 1 end
+					table.insert(gc_results, {
+						Type = "table",
+						Object = obj,
+						FieldsCount = fields
+					})
+				end
+			elseif kind == "thread" and type(obj) == "thread" then
+				local status = coroutine.status(obj)
+				if #query == 0 or status:lower():find(q_lower, 1, true) then
+					table.insert(gc_results, {
+						Type = "thread",
+						Object = obj,
+						Status = status
+					})
+				end
+			end
+		end
+
+		set_status("Scan complete: found " .. tostring(#gc_results) .. " entries.")
+		render_gc()
+	end
+
+	local function load_selected_instance()
+		selected_instance = nil
+		local explorer = apps_ref and apps_ref.Explorer
+		if explorer and explorer.Selection and explorer.Selection.List and #explorer.Selection.List > 0 then
+			local node = explorer.Selection.List[1]
+			if typeof(node.Obj) == "Instance" then
+				selected_instance = node.Obj
+			end
+		end
+		
+		if conn_target_label then
+			conn_target_label.Text = selected_instance and ("Target: " .. selected_instance:GetFullName()) or "Target: None (Select in Explorer)"
+		end
+	end
+
+	local function render_connections()
+		clear_conn_rows()
+		local y = 4
+		for i, entry in ipairs(conn_results) do
+			local row = Instance.new("Frame")
+			row.BackgroundColor3 = theme().Main1
+			row.BorderColor3 = theme().Outline1
+			row.Position = UDim2.new(0, 4, 0, y)
+			row.Size = UDim2.new(1, -8, 0, 48)
+			row.Parent = conn_scroll
+			conn_rows[#conn_rows + 1] = row
+
+			local state_color = entry.State == "enabled" and Color3.fromRGB(34, 197, 94) or Color3.fromRGB(239, 68, 68)
+			label(row, "Connection #" .. tostring(entry.Index) .. " [" .. entry.State .. "]", UDim2.new(0, 8, 0, 2), UDim2.new(1, -196, 0, 18), state_color, true)
+			local owner = label(row, "Owner: " .. entry.ScriptName, UDim2.new(0, 8, 0, 22), UDim2.new(1, -196, 0, 18), theme().PlaceholderText, false)
+			owner.TextTruncate = Enum.TextTruncate.AtEnd
+			
+			button(row, "Disable", UDim2.new(1, -190, 0, 12), UDim2.new(0, 58, 0, 22), function()
+				local ok, err = pcall(function() entry.Object:Disable() end)
+				if ok then
+					set_status("Disabled connection #" .. tostring(entry.Index))
+					entry.State = "disabled"
+					render_connections()
+				else
+					set_status("Disable failed: " .. tostring(err))
+				end
+			end)
+			
+			button(row, "Enable", UDim2.new(1, -128, 0, 12), UDim2.new(0, 56, 0, 22), function()
+				local ok, err = pcall(function() entry.Object:Enable() end)
+				if ok then
+					set_status("Enabled connection #" .. tostring(entry.Index))
+					entry.State = "enabled"
+					render_connections()
+				else
+					set_status("Enable failed: " .. tostring(err))
+				end
+			end)
+			
+			button(row, "Fire", UDim2.new(1, -68, 0, 12), UDim2.new(0, 60, 0, 22), function()
+				local ok, err = pcall(function() entry.Object:Fire() end)
+				if ok then
+					set_status("Fired connection #" .. tostring(entry.Index))
+				else
+					set_status("Fire failed: " .. tostring(err))
+				end
+			end)
+
+			y += 52
+		end
+		conn_scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+	end
+
+	local function scan_connections()
+		if not selected_instance then
+			set_status("Select an instance first.")
+			return
+		end
+		
+		local getconnections_fn = env_func("getconnections")
+		if not getconnections_fn then
+			set_status("getconnections API not available on this executor.")
+			return
+		end
+
+		local event_name = conn_event_box.Text
+		if #event_name == 0 then
+			set_status("Enter an event name (e.g. Changed, AncestorChanged, MouseButton1Click).")
+			return
+		end
+
+		local event
+		local ok, err = pcall(function()
+			event = selected_instance[event_name]
+		end)
+		if not ok or not event then
+			ok, event = pcall(selected_instance.GetPropertyChangedSignal, selected_instance, event_name)
+		end
+
+		if not ok or not event then
+			set_status("Failed to locate event '" .. event_name .. "' on target.")
+			return
+		end
+
+		local ok_conns, list = pcall(getconnections_fn, event)
+		if not ok_conns or type(list) ~= "table" then
+			set_status("Failed to get connections: " .. tostring(list))
+			return
+		end
+
+		table.clear(conn_results)
+		for i, conn in ipairs(list) do
+			local state = "enabled"
+			if conn.Enabled == false then state = "disabled" end
+			
+			local script_name = "unknown"
+			local func = conn.Function
+			if func then
+				local fenv = getfenv(func)
+				if fenv and fenv.script then
+					script_name = fenv.script:GetFullName()
+				end
+			end
+
+			table.insert(conn_results, {
+				Index = i,
+				Object = conn,
+				State = state,
+				ScriptName = script_name,
+				Function = func
+			})
+		end
+
+		set_status("Found " .. tostring(#conn_results) .. " active connections.")
+		render_connections()
+	end
+
+	local function select_tab(tab)
+		active_tab = tab
+		if tab == "gc" then
+			tab_gc_btn.BackgroundColor3 = theme().Main1
+			tab_conn_btn.BackgroundColor3 = theme().Button
+			gc_panel.Visible = true
+			conn_panel.Visible = false
+		else
+			tab_gc_btn.BackgroundColor3 = theme().Button
+			tab_conn_btn.BackgroundColor3 = theme().Main1
+			gc_panel.Visible = false
+			conn_panel.Visible = true
+			load_selected_instance()
+		end
+	end
+
+	function forensics.Init()
+		window = lib_ref.Window.new()
+		window:SetTitle("Memory Forensics")
+		window:Resize(650, 430)
+		forensics.Window = window
+
+		local content = window.GuiElems.Content
+		local t = theme()
+
+		-- Top tabs
+		local tab_bar = Instance.new("Frame")
+		tab_bar.BackgroundColor3 = t.Main2
+		tab_bar.BorderSizePixel = 0
+		tab_bar.Size = UDim2.new(1, 0, 0, 32)
+		tab_bar.Parent = content
+
+		tab_gc_btn = button(tab_bar, "Garbage Collector Scanner", UDim2.new(0, 4, 0, 4), UDim2.new(0, 160, 0, 28), function() select_tab("gc") end)
+		tab_conn_btn = button(tab_bar, "Event Connections Monitor", UDim2.new(0, 168, 0, 4), UDim2.new(0, 160, 0, 28), function() select_tab("connections") end)
+
+		-- Main Panel Left (Results list)
+		local left_frame = Instance.new("Frame")
+		left_frame.BackgroundColor3 = t.Main2
+		left_frame.BorderSizePixel = 0
+		left_frame.Position = UDim2.new(0, 0, 0, 32)
+		left_frame.Size = UDim2.new(0.6, 0, 1, -64)
+		left_frame.Parent = content
+
+		-- GC Panel
+		gc_panel = Instance.new("Frame", left_frame)
+		gc_panel.BackgroundTransparency = 1
+		gc_panel.Size = UDim2.new(1, 0, 1, 0)
+
+		gc_query_box = Instance.new("TextBox")
+		gc_query_box.BackgroundColor3 = t.TextBox
+		gc_query_box.BorderColor3 = t.Outline3
+		gc_query_box.ClearTextOnFocus = false
+		gc_query_box.Font = Enum.Font.SourceSans
+		gc_query_box.PlaceholderColor3 = t.PlaceholderText
+		gc_query_box.PlaceholderText = "Search by name/source/key..."
+		gc_query_box.Position = UDim2.new(0, 6, 0, 6)
+		gc_query_box.Size = UDim2.new(1, -12, 0, 24)
+		gc_query_box.Text = ""
+		gc_query_box.TextColor3 = t.Text
+		gc_query_box.TextSize = 13
+		gc_query_box.TextXAlignment = Enum.TextXAlignment.Left
+		gc_query_box.Parent = gc_panel
+
+		button(gc_panel, "Scan Functions", UDim2.new(0, 6, 0, 36), UDim2.new(0.33, -8, 0, 22), function() scan_gc("function") end)
+		button(gc_panel, "Scan Tables", UDim2.new(0.33, 2, 0, 36), UDim2.new(0.33, -4, 0, 22), function() scan_gc("table") end)
+		button(gc_panel, "Scan Threads", UDim2.new(0.66, 2, 0, 36), UDim2.new(0.34, -8, 0, 22), function() scan_gc("thread") end)
+
+		gc_scroll = Instance.new("ScrollingFrame")
+		gc_scroll.Active = true
+		gc_scroll.BackgroundColor3 = t.Main2
+		gc_scroll.BorderSizePixel = 0
+		gc_scroll.Position = UDim2.new(0, 0, 0, 64)
+		gc_scroll.Size = UDim2.new(1, 0, 1, -64)
+		gc_scroll.ScrollBarThickness = 6
+		gc_scroll.Parent = gc_panel
+
+		-- Connections Panel
+		conn_panel = Instance.new("Frame", left_frame)
+		conn_panel.BackgroundTransparency = 1
+		conn_panel.Size = UDim2.new(1, 0, 1, 0)
+		conn_panel.Visible = false
+
+		conn_target_label = label(conn_panel, "Target: None (Select in Explorer)", UDim2.new(0, 6, 0, 4), UDim2.new(1, -12, 0, 18), t.PlaceholderText, false)
+		conn_target_label.TextTruncate = Enum.TextTruncate.AtEnd
+		
+		conn_event_box = Instance.new("TextBox")
+		conn_event_box.BackgroundColor3 = t.TextBox
+		conn_event_box.BorderColor3 = t.Outline3
+		conn_event_box.ClearTextOnFocus = false
+		conn_event_box.Font = Enum.Font.SourceSans
+		conn_event_box.PlaceholderColor3 = t.PlaceholderText
+		conn_event_box.PlaceholderText = "Event Name (MouseButton1Click, Changed...)"
+		conn_event_box.Position = UDim2.new(0, 6, 0, 26)
+		conn_event_box.Size = UDim2.new(1, -122, 0, 24)
+		conn_event_box.Text = "Changed"
+		conn_event_box.TextColor3 = t.Text
+		conn_event_box.TextSize = 13
+		conn_event_box.TextXAlignment = Enum.TextXAlignment.Left
+		conn_event_box.Parent = conn_panel
+
+		button(conn_panel, "Use Selected", UDim2.new(1, -112, 0, 2), UDim2.new(0, 106, 0, 20), load_selected_instance)
+		button(conn_panel, "Scan Connections", UDim2.new(1, -112, 0, 26), UDim2.new(0, 106, 0, 24), scan_connections)
+
+		conn_scroll = Instance.new("ScrollingFrame")
+		conn_scroll.Active = true
+		conn_scroll.BackgroundColor3 = t.Main2
+		conn_scroll.BorderSizePixel = 0
+		conn_scroll.Position = UDim2.new(0, 0, 0, 56)
+		conn_scroll.Size = UDim2.new(1, 0, 1, -56)
+		conn_scroll.ScrollBarThickness = 6
+		conn_scroll.Parent = conn_panel
+
+		-- Inspector Frame (Right Panel)
+		inspector_frame = Instance.new("Frame")
+		inspector_frame.BackgroundColor3 = t.Main1
+		inspector_frame.BorderSizePixel = 0
+		inspector_frame.Position = UDim2.new(0.6, 0, 0, 32)
+		inspector_frame.Size = UDim2.new(0.4, 0, 1, -64)
+		inspector_frame.Parent = content
+
+		inspector_title = label(inspector_frame, "Detail Inspector", UDim2.new(0, 8, 0, 6), UDim2.new(1, -16, 0, 20), t.Text, true)
+		
+		local line = Instance.new("Frame", inspector_frame)
+		line.BackgroundColor3 = t.Outline1
+		line.BorderSizePixel = 0
+		line.Position = UDim2.new(0, 0, 0, 30)
+		line.Size = UDim2.new(1, 0, 0, 1)
+
+		inspector_scroll = Instance.new("ScrollingFrame")
+		inspector_scroll.Active = true
+		inspector_scroll.BackgroundTransparency = 1
+		inspector_scroll.BorderSizePixel = 0
+		inspector_scroll.Position = UDim2.new(0, 0, 0, 32)
+		inspector_scroll.Size = UDim2.new(1, 0, 1, -32)
+		inspector_scroll.ScrollBarThickness = 6
+		inspector_scroll.Parent = inspector_frame
+
+		local no_select = label(inspector_scroll, "Select an element to inspect it.", UDim2.new(0, 12, 0, 8), UDim2.new(1, -24, 0, 18), t.PlaceholderText, false)
+		inspector_rows[#inspector_rows + 1] = no_select
+
+		-- Footer
+		local footer = Instance.new("Frame")
+		footer.BackgroundColor3 = t.Menu
+		footer.BorderSizePixel = 0
+		footer.Position = UDim2.new(0, 0, 1, -32)
+		footer.Size = UDim2.new(1, 0, 0, 32)
+		footer.Parent = content
+
+		status_label = label(footer, "Ready. Use Garbage Collector Scanner to find in-memory objects.", UDim2.new(0, 10, 0, 7), UDim2.new(1, -20, 0, 18), t.PlaceholderText, false)
+
+		select_tab("gc")
+	end
+
+	return forensics
+end
+
+return {
+	InitDeps = initDeps,
+	InitAfterMain = initAfterMain,
+	Main = main,
+	PluginData = plugin_data,
+}
+]],
 	["MetatableHookManager.lua"] = [[
 --!nocheck
 
@@ -28491,6 +29622,7 @@ local function main()
 	local hook_cons   = {}
 	local seen        = {}
 	setmetatable(seen, { __mode = "k" })
+	local rules       = {}
 
 	local colors = {
 		out_remote   = Color3.fromRGB(100, 200, 255),
@@ -28522,6 +29654,7 @@ local function main()
 
 	local window, list_frame, tree_frame, scroll_v, status_label, detail_label, empty_label
 	local rebuild_list
+	local rule_bar, rule_label, modal, modal_box
 
 	local function report_tool(extra)
 		if not main_ref or not main_ref.ReportToolState then return end
@@ -28616,7 +29749,8 @@ local function main()
 
 	local function update_detail()
 		if not detail_label then return end
-		if selected_path == "" then
+		local has_selected = selected_path ~= ""
+		if not has_selected then
 			detail_label.Text = "All remotes"
 		else
 			local stat = remote_stats[selected_path]
@@ -28624,6 +29758,44 @@ local function main()
 				detail_label.Text = stat.class .. "  |  " .. stat.count .. " calls  |  " .. selected_path
 			else
 				detail_label.Text = selected_path
+			end
+		end
+
+		if rule_bar then
+			rule_bar.Visible = has_selected
+			if has_selected then
+				list_container.Position = UDim2.new(0, 0, 0, 54)
+				list_container.Size = UDim2.new(1, -16, 1, -54)
+				if scroll_v then
+					scroll_v.Gui.Position = UDim2.new(1, -16, 0, 54)
+					scroll_v.Gui.Size = UDim2.new(0, 16, 1, -54)
+				end
+
+				local rule = rules[selected_path]
+				if rule then
+					if rule.action == "block" then
+						rule_label.Text = "Responder: Blocked"
+						rule_label.TextColor3 = Color3.fromRGB(244, 63, 94)
+					elseif rule.action == "mock" then
+						rule_label.Text = "Responder: Mocked"
+						rule_label.TextColor3 = Color3.fromRGB(234, 179, 8)
+					end
+				else
+					rule_label.Text = "Responder: None"
+					rule_label.TextColor3 = settings_ref.Theme.Text
+				end
+			else
+				list_container.Position = UDim2.new(0, 0, 0, 28)
+				list_container.Size = UDim2.new(1, -16, 1, -28)
+				if scroll_v then
+					scroll_v.Gui.Position = UDim2.new(1, -16, 0, 28)
+					scroll_v.Gui.Size = UDim2.new(0, 16, 1, -28)
+				end
+			end
+			if scroll_v then
+				scroll_v.TotalSpace = #log_frames
+				scroll_v.VisibleSpace = math.max(1, math.floor(list_container.AbsoluteSize.Y / 37))
+				scroll_v:Update()
 			end
 		end
 	end
@@ -28988,6 +30160,12 @@ local function main()
 
 		local ok, con = pcall(function()
 			return inst[sig]:Connect(function(...)
+				local path = inst_path(inst)
+				local rule = rules[path]
+				if rule and rule.action == "block" then
+					add_log("in", inst, sig .. " [BLOCKED]", table.pack(...))
+					return
+				end
 				add_log("in", inst, sig, table.pack(...))
 			end)
 		end)
@@ -29012,6 +30190,57 @@ local function main()
 					and remote_classes[self.ClassName]
 					and out_methods[method]
 				then
+					local path = inst_path(self)
+					local rule = rules[path]
+					if rule then
+						if rule.action == "block" then
+							add_log("out", self, method .. " [BLOCKED]", table.pack(...))
+							if self.ClassName == "RemoteFunction" or self.ClassName == "BindableFunction" then
+								local mockVal = rule.val
+								if type(mockVal) == "table" then
+									return unpack(mockVal)
+								else
+									return mockVal
+								end
+							end
+							return
+						elseif rule.action == "mock" then
+							add_log("out", self, method .. " [MOCKED]", table.pack(...))
+							local val = rule.val
+							if type(val) == "function" then
+								local success, res = pcall(val, ...)
+								if success then
+									if self.ClassName == "RemoteFunction" or self.ClassName == "BindableFunction" then
+										if type(res) == "table" then
+											return unpack(res)
+										else
+											return res
+										end
+									else
+										if type(res) == "table" then
+											return namecall_orig(self, unpack(res))
+										else
+											return namecall_orig(self, res)
+										end
+									end
+								end
+							else
+								if self.ClassName == "RemoteFunction" or self.ClassName == "BindableFunction" then
+									if type(val) == "table" then
+										return unpack(val)
+									else
+										return val
+									end
+								else
+									if type(val) == "table" then
+										return namecall_orig(self, unpack(val))
+									else
+										return namecall_orig(self, val)
+									end
+								end
+							end
+						end
+					end
 					add_log("out", self, method, table.pack(...))
 				end
 				return namecall_orig(self, ...)
@@ -29230,6 +30459,36 @@ local function main()
 		detail_label.TextTruncate = Enum.TextTruncate.AtEnd
 		detail_label.Text = "All remotes"
 
+		rule_bar = Instance.new("Frame")
+		rule_bar.BackgroundColor3 = settings_ref.Theme.Main1
+		rule_bar.BorderSizePixel = 0
+		rule_bar.Position = UDim2.new(0, 0, 0, 28)
+		rule_bar.Size = UDim2.new(1, 0, 0, 26)
+		rule_bar.Parent = right_panel
+		rule_bar.Visible = false
+
+		rule_label = Instance.new("TextLabel", rule_bar)
+		rule_label.BackgroundTransparency = 1
+		rule_label.Position = UDim2.new(0, 8, 0, 0)
+		rule_label.Size = UDim2.new(0.5, 0, 1, 0)
+		rule_label.Font = Enum.Font.SourceSans
+		rule_label.TextSize = 13
+		rule_label.TextColor3 = settings_ref.Theme.Text
+		rule_label.TextXAlignment = Enum.TextXAlignment.Left
+		rule_label.Text = "Responder: None"
+
+		local block_btn = make_btn(rule_bar, "Block", 240, 50)
+		block_btn.Position = UDim2.new(1, -170, 0, 4)
+		block_btn.Size = UDim2.new(0, 50, 0, 18)
+
+		local mock_btn = make_btn(rule_bar, "Mock...", 296, 50)
+		mock_btn.Position = UDim2.new(1, -114, 0, 4)
+		mock_btn.Size = UDim2.new(0, 50, 0, 18)
+
+		local rule_clear_btn = make_btn(rule_bar, "Clear", 352, 50)
+		rule_clear_btn.Position = UDim2.new(1, -58, 0, 4)
+		rule_clear_btn.Size = UDim2.new(0, 50, 0, 18)
+
 		local list_container = Instance.new("Frame")
 		list_container.BackgroundColor3 = settings_ref.Theme.Main2
 		list_container.BorderSizePixel  = 0
@@ -29266,6 +30525,142 @@ local function main()
 		scroll_v:SetScrollFrame(list_container)
 		scroll_v.Scrolled:Connect(function()
 			list_frame.Position = UDim2.new(0, 0, 0, -scroll_v.Index * 37)
+		end)
+
+		modal = Instance.new("Frame")
+		modal.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
+		modal.BackgroundTransparency = 0.4
+		modal.BorderSizePixel = 0
+		modal.Size = UDim2.new(1, 0, 1, 0)
+		modal.ZIndex = 10
+		modal.Visible = false
+		modal.Parent = window.GuiElems.Content
+
+		local modal_content = Instance.new("Frame", modal)
+		modal_content.BackgroundColor3 = settings_ref.Theme.Main1
+		modal_content.BorderColor3 = settings_ref.Theme.Outline2
+		modal_content.Size = UDim2.new(0, 420, 0, 190)
+		modal_content.Position = UDim2.new(0.5, -210, 0.5, -95)
+		if theme_ref and theme_ref.ApplyRounding then
+			theme_ref.ApplyRounding(modal_content, 6)
+		end
+
+		local modal_title = Instance.new("TextLabel", modal_content)
+		modal_title.BackgroundTransparency = 1
+		modal_title.Position = UDim2.new(0, 12, 0, 8)
+		modal_title.Size = UDim2.new(1, -24, 0, 20)
+		modal_title.Font = theme_ref and theme_ref.MapFont(Enum.Font.SourceSansBold) or Enum.Font.SourceSansBold
+		modal_title.TextColor3 = settings_ref.Theme.Text
+		modal_title.TextSize = 14
+		modal_title.TextXAlignment = Enum.TextXAlignment.Left
+		modal_title.Text = "Set Mock Value (Luau expression)"
+
+		local modal_desc = Instance.new("TextLabel", modal_content)
+		modal_desc.BackgroundTransparency = 1
+		modal_desc.Position = UDim2.new(0, 12, 0, 30)
+		modal_desc.Size = UDim2.new(1, -24, 0, 32)
+		modal_desc.Font = theme_ref and theme_ref.MapFont(Enum.Font.SourceSans) or Enum.Font.SourceSans
+		modal_desc.TextColor3 = settings_ref.Theme.PlaceholderText
+		modal_desc.TextSize = 12
+		modal_desc.TextWrapped = true
+		modal_desc.TextXAlignment = Enum.TextXAlignment.Left
+		modal_desc.TextYAlignment = Enum.TextYAlignment.Top
+		modal_desc.Text = "For Events: return a table containing modified arguments, e.g. {50, 'modified'}. For Functions: return the mocked return value(s)."
+
+		modal_box = Instance.new("TextBox", modal_content)
+		modal_box.BackgroundColor3 = settings_ref.Theme.Main2
+		modal_box.BorderColor3 = settings_ref.Theme.Outline1
+		modal_box.Position = UDim2.new(0, 12, 0, 68)
+		modal_box.Size = UDim2.new(1, -24, 0, 72)
+		modal_box.Font = Enum.Font.Code
+		modal_box.TextSize = 12
+		modal_box.TextColor3 = settings_ref.Theme.Text
+		modal_box.TextXAlignment = Enum.TextXAlignment.Left
+		modal_box.TextYAlignment = Enum.TextYAlignment.Top
+		modal_box.ClearTextOnFocus = false
+		modal_box.MultiLine = true
+		modal_box.Text = ""
+
+		local save_btn = make_btn(modal_content, "Save", 280, 60)
+		save_btn.Position = UDim2.new(1, -140, 1, -32)
+		save_btn.Size = UDim2.new(0, 60, 0, 24)
+
+		local cancel_btn = make_btn(modal_content, "Cancel", 350, 60)
+		cancel_btn.Position = UDim2.new(1, -72, 1, -32)
+		cancel_btn.Size = UDim2.new(0, 60, 0, 24)
+
+		block_btn.MouseButton1Click:Connect(function()
+			if selected_path == "" then return end
+			local rule = rules[selected_path]
+			if rule and rule.action == "block" then
+				rules[selected_path] = nil
+			else
+				rules[selected_path] = { action = "block" }
+			end
+			update_detail()
+		end)
+
+		mock_btn.MouseButton1Click:Connect(function()
+			if selected_path == "" then return end
+			local rule = rules[selected_path]
+			if rule and rule.action == "mock" then
+				modal_box.Text = rule.raw or ""
+			else
+				modal_box.Text = ""
+			end
+			modal.Visible = true
+			modal_box:CaptureFocus()
+		end)
+
+		rule_clear_btn.MouseButton1Click:Connect(function()
+			if selected_path == "" then return end
+			rules[selected_path] = nil
+			update_detail()
+		end)
+
+		save_btn.MouseButton1Click:Connect(function()
+			local code = modal_box.Text
+			if code == "" then
+				rules[selected_path] = nil
+				modal.Visible = false
+				update_detail()
+				return
+			end
+
+			local fn, err = loadstring("return " .. code)
+			if not fn then
+				fn, err = loadstring(code)
+			end
+
+			if fn then
+				local ok, val = pcall(fn)
+				if ok then
+					rules[selected_path] = {
+						action = "mock",
+						val = type(val) == "function" and val or val,
+						raw = code
+					}
+					modal.Visible = false
+					update_detail()
+				else
+					rules[selected_path] = {
+						action = "mock",
+						val = fn,
+						raw = code
+					}
+					modal.Visible = false
+					update_detail()
+				end
+			else
+				warn("Failed to compile expression: " .. tostring(err))
+				if main_ref and main_ref.Message then
+					pcall(main_ref.Message, "Error compiling expression: " .. tostring(err))
+				end
+			end
+		end)
+
+		cancel_btn.MouseButton1Click:Connect(function()
+			modal.Visible = false
 		end)
 
 		local function update_button_states()
@@ -29379,6 +30774,527 @@ return {
 	PluginData    = plugin_data,
 }
 ]],
+	["RuntimeDebugger.lua"] = [=[
+--!nocheck
+
+local main_ref, lib_ref, apps_ref, settings_ref, env_ref, theme_ref
+
+local plugin_data = {
+	Name = "RuntimeDebugger",
+	FriendlyName = "Runtime Debugger",
+}
+
+local function initDeps(data)
+	main_ref = data.Main
+	lib_ref = data.Lib
+	apps_ref = data.Apps
+	settings_ref = data.Settings
+	env_ref = data.env
+end
+
+local function initAfterMain(t)
+	theme_ref = t.Theme
+end
+
+local function env_func(name)
+	local env = env_ref
+	if env and type(env[name]) == "function" then
+		return env[name]
+	end
+	if type(getfenv) == "function" then
+		local ok, value = pcall(function()
+			return getfenv()[name]
+		end)
+		if ok and type(value) == "function" then
+			return value
+		end
+	end
+	return nil
+end
+
+local function instrument(source)
+	local lines = source:split("\n")
+	local output = {}
+	local in_multiline = false
+	for i, line in ipairs(lines) do
+		local trimmed = line:match("^%s*(.-)%s*$")
+		if in_multiline then
+			if line:find("]]") then
+				in_multiline = false
+			end
+			table.insert(output, line)
+		else
+			if trimmed:sub(1, 2) == "--" then
+				table.insert(output, line)
+			elseif trimmed:find("%[%[") and not trimmed:find("]]") then
+				in_multiline = true
+				table.insert(output, line)
+			elseif #trimmed == 0 then
+				table.insert(output, line)
+			else
+				local indent = line:match("^(%s*)")
+				table.insert(output, indent .. "_G.DEX_DEBUG_STEP(" .. tostring(i) .. "); " .. line)
+			end
+		end
+	end
+	return table.concat(output, "\n")
+end
+
+local function main()
+	local debugger = {}
+	debugger.PluginData = plugin_data
+
+	local window, status_label, code_scroll, var_scroll, stack_scroll
+	local start_btn, resume_btn, step_btn, stop_btn
+	
+	local raw_source = "local x = 1\nlocal y = 2\nfor i = 1, 5 do\n    x = x + y\n    task.wait(0.5)\nend\nprint(x)"
+	local breakpoints = {} -- line_num -> true
+	local line_rows = {}
+	local var_rows = {}
+	local stack_rows = {}
+	
+	local debugger_thread = nil
+	local debugger_state = "stopped" -- "stopped", "paused", "running"
+	local current_line = 0
+	local step_mode = false
+	local debug_env = {}
+
+	local function theme()
+		return settings_ref.Theme
+	end
+
+	local function set_status(text)
+		if status_label then
+			status_label.Text = tostring(text)
+		end
+	end
+
+	local function label(parent, text, pos, size, color, bold)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+		l.Position = pos
+		l.Size = size
+		l.Text = text
+		l.TextColor3 = color or theme().Text
+		l.TextSize = bold and 14 or 13
+		l.TextWrapped = true
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextYAlignment = Enum.TextYAlignment.Center
+		l.Parent = parent
+		return l
+	end
+
+	local function button(parent, text, pos, size, callback)
+		local b = Instance.new("TextButton")
+		b.AutoButtonColor = false
+		b.BackgroundColor3 = theme().Button
+		b.BorderColor3 = theme().Outline2
+		b.Font = Enum.Font.SourceSans
+		b.Position = pos
+		b.Size = size
+		b.Text = text
+		b.TextColor3 = theme().Text
+		b.TextSize = 13
+		b.Parent = parent
+		b.MouseButton1Click:Connect(callback)
+		if theme_ref and theme_ref.StyleButton then
+			theme_ref.StyleButton(b)
+		elseif lib_ref and lib_ref.ButtonAnim then
+			lib_ref.ButtonAnim(b, {
+				Mode = 2,
+				StartColor = theme().Button,
+				HoverColor = theme().ButtonHover,
+				PressColor = theme().ButtonPress,
+				OutlineColor = theme().Outline2,
+			})
+		end
+		return b
+	end
+
+	local function clear_vars()
+		for _, v in ipairs(var_rows) do v:Destroy() end
+		var_rows = {}
+	end
+
+	local function clear_stack()
+		for _, v in ipairs(stack_rows) do v:Destroy() end
+		stack_rows = {}
+	end
+
+	local function update_ui_states()
+		if debugger_state == "stopped" then
+			start_btn.Text = "Start"
+			start_btn.BackgroundColor3 = theme().Button
+			resume_btn.Visible = false
+			step_btn.Visible = false
+			stop_btn.Visible = false
+		elseif debugger_state == "paused" then
+			start_btn.Text = "Restart"
+			resume_btn.Visible = true
+			step_btn.Visible = true
+			stop_btn.Visible = true
+		elseif debugger_state == "running" then
+			start_btn.Text = "Restart"
+			resume_btn.Visible = false
+			step_btn.Visible = false
+			stop_btn.Visible = true
+		end
+	end
+
+	local function render_variables(frame_level)
+		clear_vars()
+		if not debugger_thread then return end
+		
+		local y = 4
+		
+		-- Display Locals
+		local loc_title = label(var_scroll, "Locals & Upvalues:", UDim2.new(0, 6, 0, y), UDim2.new(1, -12, 0, 18), theme().Text, true)
+		var_rows[#var_rows + 1] = loc_title
+		y += 20
+		
+		local getlocal_fn = debug and debug.getlocal
+		if getlocal_fn then
+			for index = 1, 200 do
+				local ok, name, val = pcall(getlocal_fn, debugger_thread, frame_level or 1, index)
+				if ok and name then
+					local row = Instance.new("Frame")
+					row.BackgroundColor3 = theme().Main1
+					row.BorderColor3 = theme().Outline1
+					row.Position = UDim2.new(0, 4, 0, y)
+					row.Size = UDim2.new(1, -8, 0, 24)
+					row.Parent = var_scroll
+					var_rows[#var_rows + 1] = row
+					
+					label(row, tostring(name) .. " =", UDim2.new(0, 6, 0, 3), UDim2.new(0.4, -6, 1, -6), theme().Highlight, true)
+					label(row, tostring(val), UDim2.new(0.4, 6, 0, 3), UDim2.new(0.6, -12, 1, -6), theme().Text, false).TextTruncate = Enum.TextTruncate.AtEnd
+					y += 28
+				else
+					break
+				end
+			end
+		end
+		
+		-- Display Globals
+		local glob_title = label(var_scroll, "Globals:", UDim2.new(0, 6, 0, y), UDim2.new(1, -12, 0, 18), theme().Text, true)
+		var_rows[#var_rows + 1] = glob_title
+		y += 20
+		
+		for k, v in pairs(debug_env) do
+			if k ~= "task" and k ~= "wait" and k ~= "_G" and k ~= "shared" then
+				local row = Instance.new("Frame")
+				row.BackgroundColor3 = theme().Main1
+				row.BorderColor3 = theme().Outline1
+				row.Position = UDim2.new(0, 4, 0, y)
+				row.Size = UDim2.new(1, -8, 0, 24)
+				row.Parent = var_scroll
+				var_rows[#var_rows + 1] = row
+				
+				label(row, tostring(k) .. " =", UDim2.new(0, 6, 0, 3), UDim2.new(0.4, -6, 1, -6), Color3.fromRGB(96, 165, 250), true)
+				label(row, tostring(v), UDim2.new(0.4, 6, 0, 3), UDim2.new(0.6, -12, 1, -6), theme().Text, false).TextTruncate = Enum.TextTruncate.AtEnd
+				y += 28
+			end
+		end
+		
+		var_scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+	end
+
+	local function render_call_stack()
+		clear_stack()
+		if not debugger_thread then return end
+		
+		local y = 4
+		local trace_fn = debug and debug.traceback
+		if trace_fn then
+			local ok, stack_trace = pcall(trace_fn, debugger_thread)
+			if ok and stack_trace then
+				local lines = stack_trace:split("\n")
+				local frame_num = 1
+				for _, line in ipairs(lines) do
+					if line:find(":") then
+						local row = Instance.new("Frame")
+						row.BackgroundColor3 = theme().Main1
+						row.BorderColor3 = theme().Outline1
+						row.Position = UDim2.new(0, 4, 0, y)
+						row.Size = UDim2.new(1, -8, 0, 26)
+						row.Parent = stack_scroll
+						stack_rows[#stack_rows + 1] = row
+						
+						local clean_line = line:match("^%s*(.-)%s*$")
+						label(row, "Frame " .. tostring(frame_num) .. ": " .. clean_line, UDim2.new(0, 6, 0, 4), UDim2.new(1, -12, 0, 18), theme().Text, false).TextTruncate = Enum.TextTruncate.AtEnd
+						y += 30
+						frame_num = frame_num + 1
+					end
+				end
+			end
+		end
+		stack_scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+	end
+
+	local function render_code()
+		for _, row in ipairs(line_rows) do row:Destroy() end
+		line_rows = {}
+		
+		local lines = raw_source:split("\n")
+		local y = 4
+		for idx, line in ipairs(lines) do
+			local row = Instance.new("Frame")
+			row.BackgroundTransparency = 1
+			row.Position = UDim2.new(0, 4, 0, y)
+			row.Size = UDim2.new(1, -8, 0, 18)
+			row.Parent = code_scroll
+			line_rows[#line_rows + 1] = row
+			
+			local bp_indicator = Instance.new("TextButton", row)
+			bp_indicator.BackgroundTransparency = 1
+			bp_indicator.Position = UDim2.new(0, 0, 0, 0)
+			bp_indicator.Size = UDim2.new(0, 24, 1, 0)
+			bp_indicator.Font = Enum.Font.SourceSansBold
+			bp_indicator.Text = breakpoints[idx] and "●" or tostring(idx)
+			bp_indicator.TextColor3 = breakpoints[idx] and Color3.fromRGB(239, 68, 68) or theme().PlaceholderText
+			bp_indicator.TextSize = 13
+			
+			bp_indicator.MouseButton1Click:Connect(function()
+				if breakpoints[idx] then
+					breakpoints[idx] = nil
+					bp_indicator.Text = tostring(idx)
+					bp_indicator.TextColor3 = theme().PlaceholderText
+				else
+					breakpoints[idx] = true
+					bp_indicator.Text = "●"
+					bp_indicator.TextColor3 = Color3.fromRGB(239, 68, 68)
+				end
+			end)
+
+			local is_current = (idx == current_line) and (debugger_state == "paused")
+			local code_lbl = label(row, line, UDim2.new(0, 28, 0, 0), UDim2.new(1, -28, 1, 0), is_current and Color3.fromRGB(253, 224, 71) or theme().Text, is_current)
+			code_lbl.Font = Enum.Font.Code
+			code_lbl.TextSize = 12
+
+			y += 20
+		end
+		code_scroll.CanvasSize = UDim2.new(0, 0, 0, y + 10)
+	end
+
+	local function stop_session()
+		debugger_state = "stopped"
+		debugger_thread = nil
+		current_line = 0
+		step_mode = false
+		set_status("Debugging stopped.")
+		update_ui_states()
+		render_code()
+		clear_vars()
+		clear_stack()
+	end
+
+	local function step_session(action_val)
+		if not debugger_thread or coroutine.status(debugger_thread) == "dead" then
+			stop_session()
+			return
+		end
+
+		local ok, yield_type, val = coroutine.resume(debugger_thread, action_val)
+		if not ok then
+			set_status("Runtime error: " .. tostring(yield_type))
+			warn("Debugger execution error: " .. tostring(yield_type))
+			stop_session()
+			return
+		end
+
+		if coroutine.status(debugger_thread) == "dead" then
+			set_status("Execution finished.")
+			stop_session()
+			return
+		end
+
+		if yield_type == "breakpoint" then
+			debugger_state = "paused"
+			current_line = val
+			set_status("Paused at line " .. tostring(val))
+			update_ui_states()
+			render_code()
+			render_variables()
+			render_call_stack()
+		elseif yield_type == "wait" then
+			debugger_state = "running"
+			update_ui_states()
+			task.delay(val, function()
+				if debugger_state == "running" then
+					step_session()
+				end
+			end)
+		else
+			task.defer(function()
+				if debugger_state == "running" then
+					step_session()
+				end
+			end)
+		end
+	end
+
+	local function start_session()
+		set_status("Instrumenting and starting script...")
+		stop_session()
+
+		local explorer = apps_ref and apps_ref.Explorer
+		if explorer and explorer.Selection and explorer.Selection.List and #explorer.Selection.List > 0 then
+			local node = explorer.Selection.List[1]
+			if typeof(node.Obj) == "Instance" and (node.Obj:IsA("LocalScript") or node.Obj:IsA("ModuleScript") or node.Obj:IsA("Script")) then
+				raw_source = node.Obj.Source
+			end
+		end
+
+		local inst_src = instrument(raw_source)
+		local fn, err = loadstring(inst_src)
+		if not fn then
+			set_status("Syntax error: " .. tostring(err))
+			return
+		end
+
+		-- Setup cooperative sandbox environment
+		debug_env = {
+			task = {
+				wait = function(t)
+					return coroutine.yield("wait", t or 0)
+				end,
+				delay = function(t, cb)
+					task.delay(t, function()
+						task.spawn(cb)
+					end)
+				end,
+				spawn = function(cb)
+					task.spawn(cb)
+				end,
+				defer = function(cb)
+					task.defer(cb)
+				end
+			},
+			wait = function(t)
+				return coroutine.yield("wait", t or 0)
+			end,
+			print = function(...)
+				print("[DEX Debugger]", ...)
+			end,
+			warn = function(...)
+				warn("[DEX Debugger]", ...)
+			end
+		}
+		setmetatable(debug_env, {__index = getfenv(0)})
+		setfenv(fn, debug_env)
+
+		_G.DEX_DEBUG_STEP = function(line)
+			if breakpoints[line] or step_mode then
+				step_mode = false
+				coroutine.yield("breakpoint", line)
+			end
+		end
+
+		debugger_thread = coroutine.create(fn)
+		debugger_state = "running"
+		update_ui_states()
+		step_session()
+	end
+
+	function debugger.Init()
+		window = lib_ref.Window.new()
+		window:SetTitle("Runtime Debugger")
+		window:Resize(650, 430)
+		debugger.Window = window
+
+		local content = window.GuiElems.Content
+		local t = theme()
+
+		-- Toolbar
+		local toolbar = Instance.new("Frame")
+		toolbar.BackgroundColor3 = t.Main2
+		toolbar.BorderSizePixel = 0
+		toolbar.Size = UDim2.new(1, 0, 0, 36)
+		toolbar.Parent = content
+
+		start_btn = button(toolbar, "Start", UDim2.new(0, 6, 0, 6), UDim2.new(0, 68, 0, 24), start_session)
+		resume_btn = button(toolbar, "Resume", UDim2.new(0, 80, 0, 6), UDim2.new(0, 68, 0, 24), function()
+			debugger_state = "running"
+			update_ui_states()
+			step_session()
+		end)
+		step_btn = button(toolbar, "Step Over", UDim2.new(0, 154, 0, 6), UDim2.new(0, 78, 0, 24), function()
+			step_mode = true
+			debugger_state = "running"
+			update_ui_states()
+			step_session()
+		end)
+		stop_btn = button(toolbar, "Stop", UDim2.new(0, 238, 0, 6), UDim2.new(0, 58, 0, 24), stop_session)
+
+		button(toolbar, "Load Selected", UDim2.new(1, -114, 0, 6), UDim2.new(0, 108, 0, 24), function()
+			stop_session()
+			local explorer = apps_ref and apps_ref.Explorer
+			if explorer and explorer.Selection and explorer.Selection.List and #explorer.Selection.List > 0 then
+				local node = explorer.Selection.List[1]
+				if typeof(node.Obj) == "Instance" and (node.Obj:IsA("LocalScript") or node.Obj:IsA("ModuleScript") or node.Obj:IsA("Script")) then
+					raw_source = node.Obj.Source
+					set_status("Loaded script: " .. node.Obj.Name)
+				end
+			end
+			render_code()
+		end)
+
+		-- Code Scroll (Left Panel)
+		code_scroll = Instance.new("ScrollingFrame")
+		code_scroll.Active = true
+		code_scroll.BackgroundColor3 = t.Main2
+		code_scroll.BorderSizePixel = 0
+		code_scroll.Position = UDim2.new(0, 0, 0, 36)
+		code_scroll.Size = UDim2.new(0.6, 0, 1, -68)
+		code_scroll.ScrollBarThickness = 6
+		code_scroll.Parent = content
+
+		-- Variables Scroll (Right Top Panel)
+		var_scroll = Instance.new("ScrollingFrame")
+		var_scroll.Active = true
+		var_scroll.BackgroundColor3 = t.Main1
+		var_scroll.BorderSizePixel = 0
+		var_scroll.Position = UDim2.new(0.6, 0, 0, 36)
+		var_scroll.Size = UDim2.new(0.4, 0, 0.6, -18)
+		var_scroll.ScrollBarThickness = 6
+		var_scroll.Parent = content
+
+		-- Call Stack Scroll (Right Bottom Panel)
+		stack_scroll = Instance.new("ScrollingFrame")
+		stack_scroll.Active = true
+		stack_scroll.BackgroundColor3 = t.Main1
+		stack_scroll.BorderColor3 = t.Outline1
+		stack_scroll.Position = UDim2.new(0.6, 0, 0.6, 18)
+		stack_scroll.Size = UDim2.new(0.4, 0, 0.4, -50)
+		stack_scroll.ScrollBarThickness = 6
+		stack_scroll.Parent = content
+
+		local stack_lbl = label(content, "Call Stack:", UDim2.new(0.6, 6, 0.6, 2), UDim2.new(0.4, -12, 0, 14), t.PlaceholderText, true)
+
+		-- Footer
+		local footer = Instance.new("Frame")
+		footer.BackgroundColor3 = t.Menu
+		footer.BorderSizePixel = 0
+		footer.Position = UDim2.new(0, 0, 1, -32)
+		footer.Size = UDim2.new(1, 0, 0, 32)
+		footer.Parent = content
+
+		status_label = label(footer, "Ready. Toggle breakpoints by clicking line numbers.", UDim2.new(0, 10, 0, 7), UDim2.new(1, -20, 0, 18), t.PlaceholderText, false)
+
+		update_ui_states()
+		render_code()
+	end
+
+	return debugger
+end
+
+return {
+	InitDeps = initDeps,
+	InitAfterMain = initAfterMain,
+	Main = main,
+	PluginData = plugin_data,
+}
+]=],
 	["TableEditor.lua"] = [[
 local _main_ref, lib_ref, apps_ref, settings_ref, theme_ref
 

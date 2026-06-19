@@ -53,7 +53,7 @@ local EmbeddedModules = {
 local isFsSupported = readfile and writefile and isfile and isfolder and listfiles and delfile and delfolder
 
 -- Main vars
-local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
+local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
 local API, RMD
 
 -- Default Settings
@@ -266,6 +266,9 @@ Main = (function()
 		["Property Tracker"] = "Advanced",
 		["Thread Manager"] = "Advanced",
 		["Serialize Inst"] = "Advanced",
+		["Memory Forensics"] = "Advanced",
+		["Runtime Debugger"] = "Advanced",
+		["IDE Sync"] = "Advanced",
 	}
 
 	local currentCategory = "All"
@@ -508,7 +511,7 @@ Main = (function()
 		end
 	end
 
-	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub"}
+	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
 	Main.ModulePathMap = {
 		Theme = "Core/Theme",
 		Lib = "Core/Lib",
@@ -539,6 +542,7 @@ Main = (function()
 		RemoteFuzzer = "Runtime/RemoteFuzzer",
 		ClientIntelligence = "Runtime/ClientIntelligence",
 		InspectorHub = "Runtime/InspectorHub",
+		IDESync = "Tools/IDESync",
 	}
 	Main.Elevated = false
 	Main.AllowDraggableOnMobile = true
@@ -959,6 +963,7 @@ Main = (function()
 		PropertyTracker = Apps.PropertyTracker
 		InstanceSerializer = Apps.InstanceSerializer
 		ThreadManager = Apps.ThreadManager
+		IDESync = Apps.IDESync
 
 
 		--SecretServicePanel = Apps.SecretServicePanel
@@ -991,7 +996,8 @@ Main = (function()
 			RemoteFuzzer = RemoteFuzzer,
 			PropertyTracker = PropertyTracker,
 			InstanceSerializer = InstanceSerializer,
-			ThreadManager = ThreadManager
+			ThreadManager = ThreadManager,
+			IDESync = IDESync
 		}
 
 		Main.AppControls.Lib.InitAfterMain(appTable)
@@ -3439,6 +3445,7 @@ Main = (function()
 		Main.CreateLazyWindowApp({Name = "Security Auditor", IconMap = Main.LargeIcons, Icon = "Watcher", Module = SecurityAuditor, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Property Tracker", IconMap = Main.LargeIcons, Icon = "Watcher", Module = PropertyTracker, Hidden = true})
 		Main.CreateLazyWindowApp({Name = "Thread Manager", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = ThreadManager, Hidden = true})
+		Main.CreateLazyWindowApp({Name = "IDE Sync", IconMap = Main.LargeIcons, Icon = "ScriptEdit", Module = IDESync})
 		Main.CreateApp({Name = "Serialize Inst", IconMap = Main.LargeIcons, Icon = "Object", OnClick = function(callback)
 			if callback then
 				if InstanceSerializer then InstanceSerializer.Init() end
