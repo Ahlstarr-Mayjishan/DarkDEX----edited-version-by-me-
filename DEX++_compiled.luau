@@ -12356,7 +12356,7 @@ end,
     			end
     
     			if showingAttrs and attrCount < maxAttrs then
-    				local ok, attrs = pcall(obj.GetAttributes, obj)
+    				local ok, attrs = pcall(function() return obj:GetAttributes() end)
     				if ok and attrs then
     					for name,val in pairs(attrs) do
     						local typ = typeof(val)
@@ -14954,7 +14954,7 @@ end,
     			descendants = surface and surface.AllInstances
     		end
     		if not descendants then
-    			local ok, list = pcall(obj.GetDescendants, obj)
+    			local ok, list = pcall(function() return obj:GetDescendants() end)
     			descendants = ok and list or {}
     		end
     		local scanned = 0

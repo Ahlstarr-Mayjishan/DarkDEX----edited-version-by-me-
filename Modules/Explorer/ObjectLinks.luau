@@ -183,7 +183,7 @@ local function main()
 			descendants = surface and surface.AllInstances
 		end
 		if not descendants then
-			local ok, list = pcall(obj.GetDescendants, obj)
+			local ok, list = pcall(function() return obj:GetDescendants() end)
 			descendants = ok and list or {}
 		end
 		local scanned = 0
