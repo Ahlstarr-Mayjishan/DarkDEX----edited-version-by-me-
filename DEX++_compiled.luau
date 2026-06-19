@@ -11518,6 +11518,9 @@ end,
     					selection:Set(node)
     					selection.Piviot = node
     					Explorer.Refresh()
+    					if Properties and Properties.ShowExplorerProps then
+    						Properties.ShowExplorerProps()
+    					end
     				end
     
     				local id = sys.ClickId
@@ -12294,6 +12297,10 @@ end,
     
     	-- Fetches the properties to be displayed based on the explorer selection
     	Properties.ShowExplorerProps = function()
+    		Properties.Index = 0
+    		if scrollV then scrollV:ScrollTo(0, true) end
+    		if scrollH then scrollH:ToStart and scrollH:ToStart(true) or scrollH:ScrollTo(0, true) end
+    
     		local maxConflictCheck = Settings.Properties.MaxConflictCheck
     		local sList = Explorer.Selection.List
     		local foundClasses = {}
@@ -12325,7 +12332,10 @@ end,
     				local APIClassName = apiClass.Name
     				if not foundClasses[APIClassName] then
     					local apiProps = indexableProps[APIClassName]
-    					if not apiProps then apiProps = Properties.GetIndexableProps(obj,apiClass) indexableProps[APIClassName] = apiProps end
+    					if not apiProps then
+    						apiProps = Properties.GetIndexableProps(obj,apiClass) or {}
+    						indexableProps[APIClassName] = apiProps
+    					end
     
     					for i = 1,#apiProps do
     						local prop = apiProps[i]
@@ -12346,22 +12356,24 @@ end,
     			end
     
     			if showingAttrs and attrCount < maxAttrs then
-    				local attrs = getAttributes(obj)
-    				for name,val in pairs(attrs) do
-    					local typ = typeof(val)
-    					if not foundAttrs[name] then
-    						local category = (typ == "Instance" and "Class") or (typ == "EnumItem" and "Enum") or "Other"
-    						local valType = {Name = typeNameConvert[typ] or typ, Category = category}
-    						local attrProp = {IsAttribute = true, Name = "ATTR_"..name, AttributeName = name, DisplayName = name, Class = "Instance", ValueType = valType, Category = "Attributes", Tags = {}}
-    						props[propCount] = attrProp
-    						propCount = propCount + 1
-    						attrCount = attrCount + 1
-    						foundAttrs[name] = {typ,attrProp}
-    						if attrCount == maxAttrs then break end
-    					elseif foundAttrs[name][1] ~= typ then
-    						foundAttrs[name][2].MultiType = true
-    						foundAttrs[name][2].Tags.ReadOnly = true
-    						foundAttrs[name][2].ValueType = {Name = "string"}
+    				local ok, attrs = pcall(obj.GetAttributes, obj)
+    				if ok and attrs then
+    					for name,val in pairs(attrs) do
+    						local typ = typeof(val)
+    						if not foundAttrs[name] then
+    							local category = (typ == "Instance" and "Class") or (typ == "EnumItem" and "Enum") or "Other"
+    							local valType = {Name = typeNameConvert[typ] or typ, Category = category}
+    							local attrProp = {IsAttribute = true, Name = "ATTR_"..name, AttributeName = name, DisplayName = name, Class = "Instance", ValueType = valType, Category = "Attributes", Tags = {}}
+    							props[propCount] = attrProp
+    							propCount = propCount + 1
+    							attrCount = attrCount + 1
+    							foundAttrs[name] = {typ,attrProp}
+    							if attrCount == maxAttrs then break end
+    						elseif foundAttrs[name][1] ~= typ then
+    							foundAttrs[name][2].MultiType = true
+    							foundAttrs[name][2].Tags.ReadOnly = true
+    							foundAttrs[name][2].ValueType = {Name = "string"}
+    						end
     					end
     				end
     			end
@@ -19615,8 +19627,7 @@ end,
     
     	local function getNodeCenter(frame)
     		if not listFrame then return Vector2.zero end
-    		local canvasTopLeft = frame.AbsolutePosition - listFrame.AbsolutePosition + listFrame.CanvasPosition
-    		return canvasTopLeft + frame.AbsoluteSize / 2
+    		return Vector2.new(frame.Position.X.Offset + frame.Size.X.Offset / 2, frame.Position.Y.Offset + frame.Size.Y.Offset / 2)
     	end
     
     	local function getNodeEdgePoint(frame, toward)
@@ -19625,8 +19636,8 @@ end,
     		local absX, absY = math.abs(delta.X), math.abs(delta.Y)
     		if absX < 0.001 and absY < 0.001 then return center end
     
-    		local halfWidth = math.max(1, frame.AbsoluteSize.X / 2)
-    		local halfHeight = math.max(1, frame.AbsoluteSize.Y / 2)
+    		local halfWidth = math.max(1, frame.Size.X.Offset / 2)
+    		local halfHeight = math.max(1, frame.Size.Y.Offset / 2)
     		local xScale = absX > 0 and halfWidth / absX or math.huge
     		local yScale = absY > 0 and halfHeight / absY or math.huge
     		local scale = math.min(xScale, yScale)

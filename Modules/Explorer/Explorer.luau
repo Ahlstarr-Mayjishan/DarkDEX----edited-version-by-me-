@@ -2710,6 +2710,9 @@ return search]==]
 					selection:Set(node)
 					selection.Piviot = node
 					Explorer.Refresh()
+					if Properties and Properties.ShowExplorerProps then
+						Properties.ShowExplorerProps()
+					end
 				end
 
 				local id = sys.ClickId

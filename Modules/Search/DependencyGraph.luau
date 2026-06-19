@@ -140,8 +140,7 @@ local function main()
 
 	local function getNodeCenter(frame)
 		if not listFrame then return Vector2.zero end
-		local canvasTopLeft = frame.AbsolutePosition - listFrame.AbsolutePosition + listFrame.CanvasPosition
-		return canvasTopLeft + frame.AbsoluteSize / 2
+		return Vector2.new(frame.Position.X.Offset + frame.Size.X.Offset / 2, frame.Position.Y.Offset + frame.Size.Y.Offset / 2)
 	end
 
 	local function getNodeEdgePoint(frame, toward)
@@ -150,8 +149,8 @@ local function main()
 		local absX, absY = math.abs(delta.X), math.abs(delta.Y)
 		if absX < 0.001 and absY < 0.001 then return center end
 
-		local halfWidth = math.max(1, frame.AbsoluteSize.X / 2)
-		local halfHeight = math.max(1, frame.AbsoluteSize.Y / 2)
+		local halfWidth = math.max(1, frame.Size.X.Offset / 2)
+		local halfHeight = math.max(1, frame.Size.Y.Offset / 2)
 		local xScale = absX > 0 and halfWidth / absX or math.huge
 		local yScale = absY > 0 and halfHeight / absY or math.huge
 		local scale = math.min(xScale, yScale)
