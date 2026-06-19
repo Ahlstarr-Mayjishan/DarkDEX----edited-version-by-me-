@@ -1910,7 +1910,10 @@ local function main()
 				self:Display(obj, self.IndexDict[key])
 			else
 				local rmdEntry = RMD.Classes[obj.ClassName]
-				Explorer.ClassIcons:Display(obj, rmdEntry and rmdEntry.ExplorerImageIndex or 0)
+				local explorerApp = Apps.Explorer or Explorer
+				if explorerApp and explorerApp.ClassIcons then
+					explorerApp.ClassIcons:Display(obj, rmdEntry and rmdEntry.ExplorerImageIndex or 0)
+				end
 			end
 		end
 
@@ -3760,14 +3763,22 @@ local function main()
 								end
 							end)
 						end
-
 						if item.OnRightClick then
-							newEntry.MouseButton2Click:Connect(function()
-								item.OnRightClick(item.Name)
-								if not item.NoHide then
-									self:Hide()
-								end
-							end)
+							local clicked = false
+							local function trigger()
+								if clicked then return end
+								clicked = true
+								task.spawn(function()
+									item.OnRightClick(item.Name)
+									if not item.NoHide then
+										self:Hide()
+									end
+									task.wait(0.1)
+									clicked = false
+								end)
+							end
+							newEntry.MouseButton2Down:Connect(trigger)
+							newEntry.MouseButton2Click:Connect(trigger)
 						end
 					end
 

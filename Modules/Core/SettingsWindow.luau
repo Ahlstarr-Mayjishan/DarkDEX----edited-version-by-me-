@@ -353,6 +353,24 @@ local function main()
 		copypathUseChildren.OnInput:Connect(function()
 			Settings.Explorer.CopyPathUseGetChildren = copypathUseChildren.Toggled
 		end)
+
+		AddSeperator("Viewport Interaction")
+
+		local viewportMenuEnabled = AddCheckbox("Viewport Context Menu", Settings.Explorer.ViewportContextMenuEnabled)
+		viewportMenuEnabled.OnInput:Connect(function()
+			Settings.Explorer.ViewportContextMenuEnabled = viewportMenuEnabled.Toggled
+			if Explorer and Explorer.UpdateViewportListener then
+				Explorer.UpdateViewportListener()
+			end
+		end)
+
+		local viewportMenuTrigger = AddDropdown("Viewport Menu Trigger", {"Right Click", "Middle Click"}, Settings.Explorer.ViewportContextMenuTrigger, false, 100)
+		viewportMenuTrigger.OnSelect:Connect(function()
+			Settings.Explorer.ViewportContextMenuTrigger = viewportMenuTrigger.Selected
+			if Explorer and Explorer.UpdateViewportListener then
+				Explorer.UpdateViewportListener()
+			end
+		end)
 		
 		AddSeperator("Properties")
 

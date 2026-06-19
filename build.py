@@ -28,7 +28,8 @@ def build():
             "TaskRouter", "ThreadManager",
         ],
         "Explorer": [
-            "Explorer", "Properties", "SaveInstance", "ObjectLinks", "InstanceSerializer",
+            "Explorer", "EditMenu", "NavigationMenu", "ObjectMenu", "ScriptMenu", "InteractionMenu", "PlayerMenu", "NilInstanceMenu", "Properties", "SaveInstance", "ObjectLinks", "InstanceSerializer",
+            "Clipboard", "Duplicate", "Deletion", "PropertyCopier", "Rename",
         ],
         "Roblox Assets Viewer": [
             "ModelViewer", "ImageViewer", "SoundViewer", "AnimationViewer",
@@ -48,11 +49,15 @@ def build():
         ],
     }
     module_list = [name for names in module_groups.values() for name in names]
-    module_paths = {
-        name: os.path.join("Modules", group, f"{name}.luau")
-        for group, names in module_groups.items()
-        for name in names
-    }
+    module_paths = {}
+    for group, names in module_groups.items():
+        for name in names:
+            if name.endswith("Menu"):
+                module_paths[name] = os.path.join("Modules", group, "ContextMenu", f"{name}.luau")
+            elif group == "Roblox Assets Viewer":
+                module_paths[name] = os.path.join("Modules", "Explorer", "ContextMenu", "Roblox Assets Viewer", f"{name}.luau")
+            else:
+                module_paths[name] = os.path.join("Modules", group, f"{name}.luau")
     
     embedded_str = ""
     for name in module_list:

@@ -53,7 +53,7 @@ local EmbeddedModules = {
 local isFsSupported = readfile and writefile and isfile and isfolder and listfiles and delfile and delfolder
 
 -- Main vars
-local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
+local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync, Clipboard, Duplicate, Deletion, PropertyCopier, Rename--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
 local API, RMD
 
 -- Default Settings
@@ -70,7 +70,9 @@ DefaultSettings = (function()
 			AutoUpdateMode = 0, -- 0 Default, 1 no tree update, 2 no descendant events, 3 frozen
 			PartSelectionBox = true,
 			GuiSelectionBox = true,
-			CopyPathUseGetChildren = true
+			CopyPathUseGetChildren = true,
+			ViewportContextMenuEnabled = true,
+			ViewportContextMenuTrigger = "Middle Click"
 		},
 		Properties = {
 			_Recurse = true,
@@ -511,7 +513,7 @@ Main = (function()
 		end
 	end
 
-	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","SoundViewer","AnimationViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
+	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","EditMenu","NavigationMenu","ObjectMenu","ScriptMenu","InteractionMenu","PlayerMenu","NilInstanceMenu","Properties","SaveInstance","ModelViewer","ImageViewer","SoundViewer","AnimationViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync","Clipboard","Duplicate","Deletion","PropertyCopier","Rename"}
 	Main.ModulePathMap = {
 		Theme = "Core/Theme",
 		Lib = "Core/Lib",
@@ -521,12 +523,19 @@ Main = (function()
 		TaskRouter = "Core/TaskRouter",
 		ThreadManager = "Core/ThreadManager",
 		Explorer = "Explorer/Explorer",
+		EditMenu = "Explorer/ContextMenu/EditMenu",
+		NavigationMenu = "Explorer/ContextMenu/NavigationMenu",
+		ObjectMenu = "Explorer/ContextMenu/ObjectMenu",
+		ScriptMenu = "Explorer/ContextMenu/ScriptMenu",
+		InteractionMenu = "Explorer/ContextMenu/InteractionMenu",
+		PlayerMenu = "Explorer/ContextMenu/PlayerMenu",
+		NilInstanceMenu = "Explorer/ContextMenu/NilInstanceMenu",
 		Properties = "Explorer/Properties",
 		SaveInstance = "Explorer/SaveInstance",
-		ModelViewer = "Roblox Assets Viewer/ModelViewer",
-		ImageViewer = "Roblox Assets Viewer/ImageViewer",
-		SoundViewer = "Roblox Assets Viewer/SoundViewer",
-		AnimationViewer = "Roblox Assets Viewer/AnimationViewer",
+		ModelViewer = "Explorer/ContextMenu/Roblox Assets Viewer/ModelViewer",
+		ImageViewer = "Explorer/ContextMenu/Roblox Assets Viewer/ImageViewer",
+		SoundViewer = "Explorer/ContextMenu/Roblox Assets Viewer/SoundViewer",
+		AnimationViewer = "Explorer/ContextMenu/Roblox Assets Viewer/AnimationViewer",
 		ObjectLinks = "Explorer/ObjectLinks",
 		InstanceSerializer = "Explorer/InstanceSerializer",
 		SmartDecompiler = "Search/SmartDecompiler",
@@ -545,6 +554,11 @@ Main = (function()
 		ClientIntelligence = "Runtime/ClientIntelligence",
 		InspectorHub = "Runtime/InspectorHub",
 		IDESync = "Tools/IDESync",
+		Clipboard = "Explorer/Clipboard",
+		Duplicate = "Explorer/Duplicate",
+		Deletion = "Explorer/Deletion",
+		PropertyCopier = "Explorer/PropertyCopier",
+		Rename = "Explorer/Rename",
 	}
 	Main.Elevated = false
 	Main.AllowDraggableOnMobile = true
@@ -972,6 +986,11 @@ Main = (function()
 		InstanceSerializer = Apps.InstanceSerializer
 		ThreadManager = Apps.ThreadManager
 		IDESync = Apps.IDESync
+		Clipboard = Apps.Clipboard
+		Duplicate = Apps.Duplicate
+		Deletion = Apps.Deletion
+		PropertyCopier = Apps.PropertyCopier
+		Rename = Apps.Rename
 
 
 		--SecretServicePanel = Apps.SecretServicePanel
@@ -1007,7 +1026,12 @@ Main = (function()
 			PropertyTracker = PropertyTracker,
 			InstanceSerializer = InstanceSerializer,
 			ThreadManager = ThreadManager,
-			IDESync = IDESync
+			IDESync = IDESync,
+			Clipboard = Clipboard,
+			Duplicate = Duplicate,
+			Deletion = Deletion,
+			PropertyCopier = PropertyCopier,
+			Rename = Rename
 		}
 
 		Main.AppControls.Lib.InitAfterMain(appTable)

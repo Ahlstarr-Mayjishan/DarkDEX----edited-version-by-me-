@@ -2123,7 +2123,10 @@ end,
     				self:Display(obj, self.IndexDict[key])
     			else
     				local rmdEntry = RMD.Classes[obj.ClassName]
-    				Explorer.ClassIcons:Display(obj, rmdEntry and rmdEntry.ExplorerImageIndex or 0)
+    				local explorerApp = Apps.Explorer or Explorer
+    				if explorerApp and explorerApp.ClassIcons then
+    					explorerApp.ClassIcons:Display(obj, rmdEntry and rmdEntry.ExplorerImageIndex or 0)
+    				end
     			end
     		end
     
@@ -3973,14 +3976,22 @@ end,
     								end
     							end)
     						end
-    
     						if item.OnRightClick then
-    							newEntry.MouseButton2Click:Connect(function()
-    								item.OnRightClick(item.Name)
-    								if not item.NoHide then
-    									self:Hide()
-    								end
-    							end)
+    							local clicked = false
+    							local function trigger()
+    								if clicked then return end
+    								clicked = true
+    								task.spawn(function()
+    									item.OnRightClick(item.Name)
+    									if not item.NoHide then
+    										self:Hide()
+    									end
+    									task.wait(0.1)
+    									clicked = false
+    								end)
+    							end
+    							newEntry.MouseButton2Down:Connect(trigger)
+    							newEntry.MouseButton2Click:Connect(trigger)
     						end
     					end
     
@@ -7432,6 +7443,24 @@ end,
     		copypathUseChildren.OnInput:Connect(function()
     			Settings.Explorer.CopyPathUseGetChildren = copypathUseChildren.Toggled
     		end)
+    
+    		AddSeperator("Viewport Interaction")
+    
+    		local viewportMenuEnabled = AddCheckbox("Viewport Context Menu", Settings.Explorer.ViewportContextMenuEnabled)
+    		viewportMenuEnabled.OnInput:Connect(function()
+    			Settings.Explorer.ViewportContextMenuEnabled = viewportMenuEnabled.Toggled
+    			if Explorer and Explorer.UpdateViewportListener then
+    				Explorer.UpdateViewportListener()
+    			end
+    		end)
+    
+    		local viewportMenuTrigger = AddDropdown("Viewport Menu Trigger", {"Right Click", "Middle Click"}, Settings.Explorer.ViewportContextMenuTrigger, false, 100)
+    		viewportMenuTrigger.OnSelect:Connect(function()
+    			Settings.Explorer.ViewportContextMenuTrigger = viewportMenuTrigger.Selected
+    			if Explorer and Explorer.UpdateViewportListener then
+    				Explorer.UpdateViewportListener()
+    			end
+    		end)
     		
     		AddSeperator("Properties")
     
@@ -9922,6 +9951,10 @@ end,
     			context:AddRegistered("VIEW_OBJECT")
     			context:AddRegistered("3DVIEW_MODEL")
     		end
+    		if presentClasses["BasePart"] then
+    			context:AddRegistered("COPY_PROPERTIES")
+    			context:AddRegistered("PASTE_PROPERTIES", not Apps.PropertyCopier or not Apps.PropertyCopier.HasCache())
+    		end
     		if presentClasses["Tween"] then context:AddRegistered("PLAY_TWEEN") end
     		if presentClasses["Animation"] then
     			context:AddRegistered("LOAD_ANIMATION")
@@ -9996,844 +10029,40 @@ end,
     			return true
     		end
     
-    		context:Register("CUT",{Name = "Cut", IconMap = Explorer.MiscIcons, Icon = "Cut", DisabledIcon = "Cut_Disabled", Shortcut = "Ctrl+Z", OnClick = function()
-    			local destroy,clone = game.Destroy,game.Clone
-    			local sList,newClipboard = selection.List,{}
-    			local count = 1
-    			for i = 1,#sList do
-    				local inst = sList[i].Obj
-    				local s,cloned = pcall(clone,inst)
-    				if s and cloned then
-    					newClipboard[count] = cloned
-    					count = count + 1
-    				end
-    				pcall(destroy,inst)
-    			end
-    			clipboard = newClipboard
-    			selection:Clear()
-    		end})
-    
-    		context:Register("COPY",{Name = "Copy", IconMap = Explorer.MiscIcons, Icon = "Copy", DisabledIcon = "Copy_Disabled", Shortcut = "Ctrl+C", OnClick = function()
-    			local clone = game.Clone
-    			local sList,newClipboard = selection.List,{}
-    			local count = 1
-    			for i = 1,#sList do
-    				local inst = sList[i].Obj
-    				local s,cloned = pcall(clone,inst)
-    				if s and cloned then
-    					newClipboard[count] = cloned
-    					count = count + 1
-    				end
-    			end
-    			clipboard = newClipboard
-    		end})
-    
-    		context:Register("PASTE",{Name = "Paste Into", IconMap = Explorer.MiscIcons, Icon = "Paste", DisabledIcon = "Paste_Disabled", Shortcut = "Ctrl+Shift+V", OnClick = function()
-    			local sList = selection.List
-    			local newSelection = {}
-    			local count = 1
-    			for i = 1,#sList do
-    				local node = sList[i]
-    				local inst = node.Obj
-    				Explorer.MakeNodeVisible(node,true)
-    				for c = 1,#clipboard do
-    					local cloned = clipboard[c]:Clone()
-    					if cloned then
-    						cloned.Parent = inst
-    						local clonedNode = nodes[cloned]
-    						if clonedNode then newSelection[count] = clonedNode count = count + 1 end
-    					end
-    				end
-    			end
-    			selection:SetTable(newSelection)
-    
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			end
-    		end})
-    
-    		context:Register("DUPLICATE",{Name = "Duplicate", IconMap = Explorer.MiscIcons, Icon = "Copy", DisabledIcon = "Copy_Disabled", Shortcut = "Ctrl+D", OnClick = function()
-    			local clone = game.Clone
-    			local sList = selection.List
-    			local newSelection = {}
-    			local count = 1
-    			for i = 1,#sList do
-    				local node = sList[i]
-    				local inst = node.Obj
-    				local instPar = node.Parent and node.Parent.Obj
-    				Explorer.MakeNodeVisible(node)
-    				local s,cloned = pcall(clone,inst)
-    				if s and cloned then
-    					cloned.Parent = instPar
-    					local clonedNode = nodes[cloned]
-    					if clonedNode then newSelection[count] = clonedNode count = count + 1 end
-    				end
-    			end
-    
-    			selection:SetTable(newSelection)
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			end
-    		end})
-    
-    		context:Register("DELETE",{Name = "Delete", IconMap = Explorer.MiscIcons, Icon = "Delete", DisabledIcon = "Delete_Disabled", Shortcut = "Del", OnClick = function()
-    			local destroy = game.Destroy
-    			local sList = selection.List
-    			for i = 1,#sList do
-    				pcall(destroy,sList[i].Obj)
-    			end
-    			selection:Clear()
-    		end})
-    
-    		context:Register("DELETE_CHILDREN",{Name = "Delete Children", IconMap = Explorer.MiscIcons, Icon = "Delete", DisabledIcon = "Delete_Disabled", Shortcut = "Shift+Del", OnClick = function()
-    			local sList = selection.List
-    			for i = 1,#sList do
-    				pcall(sList[i].Obj.ClearAllChildren,sList[i].Obj)
-    			end
-    			selection:Clear()
-    		end})
-    		context:Register("RENAME",{Name = "Rename", IconMap = Explorer.MiscIcons, Icon = "Rename", DisabledIcon = "Rename_Disabled", Shortcut = "F2", OnClick = function()
-    			local sList = selection.List
-    			if sList[1] then
-    				Explorer.SetRenamingNode(sList[1])
-    			end
-    		end})
-    
-    		context:Register("GROUP",{Name = "Group", IconMap = Explorer.MiscIcons, Icon = "Group", DisabledIcon = "Group_Disabled", Shortcut = "Ctrl+G", OnClick = function()
-    			local sList = selection.List
-    			if #sList == 0 then return end
-    
-    			local model = Instance.new("Model",sList[#sList].Obj.Parent)
-    			for i = 1,#sList do
-    				pcall(function() sList[i].Obj.Parent = model end)
-    			end
-    
-    			if nodes[model] then
-    				selection:Set(nodes[model])
-    				Explorer.ViewNode(nodes[model])
-    			end
-    		end})
-    
-    		context:Register("UNGROUP",{Name = "Ungroup", IconMap = Explorer.MiscIcons, Icon = "Ungroup", DisabledIcon = "Ungroup_Disabled", Shortcut = "Ctrl+U", OnClick = function()
-    			local newSelection = {}
-    			local count = 1
-    			local isa = game.IsA
-    
-    			local function ungroup(node)
-    				local par = node.Parent.Obj
-    				local ch = {}
-    				local chCount = 1
-    
-    				for i = 1,#node do
-    					local n = node[i]
-    					newSelection[count] = n
-    					ch[chCount] = n
-    					count = count + 1
-    					chCount = chCount + 1
-    				end
-    
-    				for i = 1,#ch do
-    					pcall(function() ch[i].Obj.Parent = par end)
-    				end
-    
-    				node.Obj:Destroy()
-    			end
-    
-    			for i,v in next,selection.List do
-    				if isa(v.Obj,"Model") then
-    					ungroup(v)
-    				end
-    			end
-    
-    			selection:SetTable(newSelection)
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			end
-    		end})
-    
-    		context:Register("SELECT_CHILDREN",{Name = "Select Children", IconMap = Explorer.MiscIcons, Icon = "SelectChildren", DisabledIcon = "SelectChildren_Disabled", OnClick = function()
-    			local newSelection = {}
-    			local count = 1
-    			local sList = selection.List
-    
-    			for i = 1,#sList do
-    				local node = sList[i]
-    				for ind = 1,#node do
-    					local cNode = node[ind]
-    					if ind == 1 then Explorer.MakeNodeVisible(cNode) end
-    
-    					newSelection[count] = cNode
-    					count = count + 1
-    				end
-    			end
-    
-    			selection:SetTable(newSelection)
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			else
-    				Explorer.Refresh()
-    			end
-    		end})
-    
-    		context:Register("JUMP_TO_PARENT",{Name = "Jump to Parent", IconMap = Explorer.MiscIcons, Icon = "JumpToParent", OnClick = function()
-    			local newSelection = {}
-    			local count = 1
-    			local sList = selection.List
-    
-    			for i = 1,#sList do
-    				local node = sList[i]
-    				if node.Parent then
-    					newSelection[count] = node.Parent
-    					count = count + 1
-    				end
-    			end
-    
-    			selection:SetTable(newSelection)
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			else
-    				Explorer.Refresh()
-    			end
-    		end})
-    
-    		context:Register("TELEPORT_TO",{Name = "Teleport To", IconMap = Explorer.MiscIcons, Icon = "TeleportTo", OnClick = function()
-    			local sList = selection.List
-    			local plrRP = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-    
-    			if not plrRP then return end
-    
-    			for _,node in next, sList do
-    				local Obj = node.Obj
-    
-    				if Obj:IsA("BasePart") then
-    					if Obj.CanCollide then
-    						plr.Character:MoveTo(Obj.Position)
-    					else
-    						plrRP.CFrame = CFrame.new(Obj.Position + Settings.Explorer.TeleportToOffset)
-    					end
-    					break
-    				elseif Obj:IsA("Model") then
-    					if Obj.PrimaryPart then
-    						if Obj.PrimaryPart.CanCollide then
-    							plr.Character:MoveTo(Obj.PrimaryPart.Position)
-    						else
-    							plrRP.CFrame = CFrame.new(Obj.PrimaryPart.Position + Settings.Explorer.TeleportToOffset)
-    						end
-    						break
-    					else
-    						local part = Obj:FindFirstChildWhichIsA("BasePart", true)
-    						if part and nodes[part] then
-    							if part.CanCollide then
-    								plr.Character:MoveTo(part.Position)
-    							else
-    								plrRP.CFrame = CFrame.new(part.Position + Settings.Explorer.TeleportToOffset)
-    							end
-    							break
-    						elseif Obj.WorldPivot then
-    							plrRP.CFrame = Obj.WorldPivot
-    						end
-    					end
-    				end
-    			end
-    		end})
-    
-    		local OldAnimation
-    		context:Register("PLAY_TWEEN",{Name = "Play Tween", IconMap = Explorer.MiscIcons, Icon = "Play", OnClick = function()
-    			local sList = selection.List
-    
-    			for i = 1, #sList do
-    				local node = sList[i]
-    				local Obj = node.Obj
-    
-    				if Obj:IsA("Tween") then Obj:Play() end
-    			end
-    		end})
-    
-    		local OldAnimation
-    		context:Register("LOAD_ANIMATION",{Name = "Load Animation", IconMap = Explorer.MiscIcons, Icon = "Play", OnClick = function()
-    			local sList = selection.List
-    
-    			local Humanoid = plr.Character and plr.Character:FindFirstChild("Humanoid")
-    			if not Humanoid then return end
-    
-    			for i = 1, #sList do
-    				local node = sList[i]
-    				local Obj = node.Obj
-    
-    				if Obj:IsA("Animation") then
-    					if OldAnimation then OldAnimation:Stop() end
-    					OldAnimation = Humanoid:LoadAnimation(Obj)
-    					OldAnimation:Play()
-    					break
-    				end
-    			end
-    		end})
-    
-    		context:Register("STOP_ANIMATION",{Name = "Stop Animation", IconMap = Explorer.MiscIcons, Icon = "Pause", OnClick = function()
-    			local sList = selection.List
-    
-    			local Humanoid = plr.Character and plr.Character:FindFirstChild("Humanoid")
-    			if not Humanoid then return end
-    
-    			for i = 1, #sList do
-    				local node = sList[i]
-    				local Obj = node.Obj
-    
-    				if Obj:IsA("Animation") then
-    					if OldAnimation then OldAnimation:Stop() end
-    					Humanoid:LoadAnimation(Obj):Stop()
-    					break
-    				end
-    			end
-    		end})
-    
-    		context:Register("EXPAND_ALL",{Name = "Expand All", OnClick = function()
-    			local sList = selection.List
-    
-    			local function expand(node)
-    				expanded[node] = true
-    				for i = 1,#node do
-    					if #node[i] > 0 then
-    						expand(node[i])
-    					end
-    				end
-    			end
-    
-    			for i = 1,#sList do
-    				expand(sList[i])
-    			end
-    
-    			Explorer.ForceUpdate()
-    		end})
-    
-    		context:Register("COLLAPSE_ALL",{Name = "Collapse All", OnClick = function()
-    			local sList = selection.List
-    
-    			local function expand(node)
-    				expanded[node] = nil
-    				for i = 1,#node do
-    					if #node[i] > 0 then
-    						expand(node[i])
-    					end
-    				end
-    			end
-    
-    			for i = 1,#sList do
-    				expand(sList[i])
-    			end
-    
-    			Explorer.ForceUpdate()
-    		end})
-    
-    		context:Register("CLEAR_SEARCH_AND_JUMP_TO",{Name = "Clear Search and Jump to", OnClick = function()
-    			local newSelection = {}
-    			local count = 1
-    			local sList = selection.List
-    
-    			for i = 1,#sList do
-    				newSelection[count] = sList[i]
-    				count = count + 1
-    			end
-    
-    			selection:SetTable(newSelection)
-    			Explorer.ClearSearch()
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			end
-    		end})
-    
-    		-- this code is very bad but im lazy and it works so cope
-    		local clth = function(str)
-    			if str:sub(1, 28) == "game:GetService(\"Workspace\")" then str = str:gsub("game:GetService%(\"Workspace\"%)", "workspace", 1) end
-    			if str:sub(1, 27 + #plr.Name) == "game:GetService(\"Players\")." .. plr.Name then str = str:gsub("game:GetService%(\"Players\"%)." .. plr.Name, "game:GetService(\"Players\").LocalPlayer", 1) end
-    			return str
-    		end
-    
-    		local function summarizeForAI(obj)
-    			local lines = {}
-    			local function push(text)
-    				lines[#lines + 1] = text
-    			end
-    			local function compactSourceAnalysis(analysis)
-    				if type(analysis) ~= "string" or analysis == "" then return nil end
-    				local httpService = service and service.HttpService
-    				if not httpService then
-    					local ok, resolved = pcall(game.GetService, game, "HttpService")
-    					if ok then httpService = resolved end
-    				end
-    				if not httpService then return analysis end
-    				local ok, decoded = pcall(function()
-    					return httpService:JSONDecode(analysis)
-    				end)
-    				if not ok or type(decoded) ~= "table" then return analysis end
-    
-    				local parts = {}
-    				if decoded.lines then parts[#parts + 1] = tostring(decoded.lines) .. " lines" end
-    				if decoded.functions then parts[#parts + 1] = tostring(decoded.functions) .. " functions" end
-    				if decoded.requires then parts[#parts + 1] = tostring(decoded.requires) .. " requires" end
-    				if decoded.remoteCalls then parts[#parts + 1] = tostring(decoded.remoteCalls) .. " remote calls" end
-    				if decoded.riskySignals then parts[#parts + 1] = tostring(decoded.riskySignals) .. " risky signals" end
-    				if type(decoded.topIdentifiers) == "table" and #decoded.topIdentifiers > 0 then
-    					local ids = {}
-    					for i = 1, math.min(#decoded.topIdentifiers, 5) do
-    						ids[#ids + 1] = tostring(decoded.topIdentifiers[i])
-    					end
-    					parts[#parts + 1] = "top identifiers: " .. table.concat(ids, ", ")
-    				end
-    				return table.concat(parts, " | ")
-    			end
-    			local okPath, path = pcall(function()
-    				return Explorer.GetInstancePath(obj)
-    			end)
-    			push("- " .. (okPath and clth(tostring(path)) or obj:GetFullName()) .. " [" .. obj.ClassName .. "]")
-    			push("  Parent: " .. (obj.Parent and clth(tostring(Explorer.GetInstancePath(obj.Parent))) or "nil"))
-    
-    			local children = obj:GetChildren()
-    			local scriptCount, remoteCount, partCount = 0, 0, 0
-    			local notable = {}
-    			for _, child in ipairs(children) do
-    				if child:IsA("LuaSourceContainer") then
-    					scriptCount += 1
-    					if #notable < 5 then notable[#notable + 1] = child.Name .. " [" .. child.ClassName .. "]" end
-    				elseif child:IsA("BasePart") then
-    					partCount += 1
-    				elseif child:IsA("RemoteEvent") or child:IsA("RemoteFunction") or child:IsA("UnreliableRemoteEvent") or child:IsA("BindableEvent") or child:IsA("BindableFunction") then
-    					remoteCount += 1
-    					if #notable < 5 then notable[#notable + 1] = child.Name .. " [" .. child.ClassName .. "]" end
-    				end
-    			end
-    			push(("  Children: %d | scripts: %d | remotes/bindables: %d | parts: %d"):format(#children, scriptCount, remoteCount, partCount))
-    			if #notable > 0 then
-    				push("  Notable children: " .. table.concat(notable, ", "))
-    			end
-    
-    			if obj:IsA("BasePart") then
-    				push(("  BasePart: Anchored=%s CanCollide=%s Transparency=%s"):format(tostring(obj.Anchored), tostring(obj.CanCollide), tostring(obj.Transparency)))
-    			end
-    			if obj:IsA("Model") then
-    				push("  Model: PrimaryPart=" .. tostring(obj.PrimaryPart and obj.PrimaryPart.Name or "nil"))
-    			end
-    			if obj:IsA("LuaSourceContainer") then
-    				if obj:IsA("Script") or obj:IsA("LocalScript") then
-    					push("  RunContext: " .. tostring(obj.RunContext))
-    				end
-    				if env.isViableDecompileScript then
-    					push("  Decompileable: " .. tostring(env.isViableDecompileScript(obj)))
-    				end
-    				if env.DecompileCache and env.DecompileCache.Read and env.HelperServer and env.HelperServer.AnalyzeSource then
-    					local cacheOk, cachedSource = pcall(env.DecompileCache.Read, obj)
-    					if cacheOk and type(cachedSource) == "string" then
-    						local helperOk, analysis = pcall(env.HelperServer.AnalyzeSource, cachedSource)
-    						if helperOk and type(analysis) == "string" and #analysis > 0 then
-    							push("  Cached source analysis: " .. (compactSourceAnalysis(analysis) or analysis))
-    						end
-    					end
-    				end
-    			end
-    			return table.concat(lines, "\n")
-    		end
-    
-    		local function buildAIPrompt()
-    			local sList = selection and selection.List or {}
-    			local lines = {
-    				"You are helping me inspect Roblox objects in DEX++.",
-    				"I am a beginner, so explain in simple language and keep jargon low.",
-    				"",
-    				"Goal:",
-    				"- Tell me what this selection likely does.",
-    				"- Point out which scripts, remotes, or nearby objects matter most.",
-    				"- If edits are needed, give short step-by-step guidance I can follow.",
-    				"",
-    				"Selection summary:",
-    				("Count: %d"):format(#sList),
-    			}
-    			for i = 1, math.min(#sList, 6) do
-    				if sList[i] and sList[i].Obj then
-    					lines[#lines + 1] = summarizeForAI(sList[i].Obj)
-    				end
-    			end
-    			if #sList > 6 then
-    				lines[#lines + 1] = ("... and %d more selected object(s)."):format(#sList - 6)
-    			end
-    			local taskText = table.concat(lines, "\n")
-    			if Apps.TaskRouter and Apps.TaskRouter.RouteTask then
-    				local ok, decision, sourceKind = pcall(Apps.TaskRouter.RouteTask, taskText)
-    				if ok and decision and decision.primary then
-    					local primary = decision.primary
-    					local secondary = decision.secondary or {}
-    					lines[#lines + 1] = ""
-    					lines[#lines + 1] = "Role recommendation:"
-    					lines[#lines + 1] = ("- Primary: %s [%s] -> %s"):format(
-    						tostring(primary.label or "Unknown"),
-    						tostring(primary.language or "Unknown"),
-    						tostring(primary.module or "Unknown")
-    					)
-    					lines[#lines + 1] = ("- Confidence: %s%% | Source: %s"):format(tostring(primary.confidence or 0), tostring(sourceKind or "local"))
-    					lines[#lines + 1] = ("- Why: %s"):format(tostring(primary.summary or ""))
-    					if secondary.label then
-    						lines[#lines + 1] = ("- Fallback: %s [%s] -> %s"):format(
-    							tostring(secondary.label or "Unknown"),
-    							tostring(secondary.language or "Unknown"),
-    							tostring(secondary.module or "Unknown")
-    						)
-    					end
-    					if decision.workflow then
-    						for i = 1, math.min(3, #decision.workflow) do
-    							lines[#lines + 1] = "- " .. tostring(decision.workflow[i])
-    						end
-    					end
-    				end
-    			end
-    			lines[#lines + 1] = ""
-    			lines[#lines + 1] = "Helpful DEX++ tools already available:"
-    			lines[#lines + 1] = "- Object Links / Reference Inspector"
-    			lines[#lines + 1] = "- Script Relations / Dependency Graph"
-    			lines[#lines + 1] = "- Remote Usage Map / Runtime Inspector"
-    			lines[#lines + 1] = "- Code Search / Smart Search"
-    			lines[#lines + 1] = ""
-    			lines[#lines + 1] = "Answer with the best next actions first, then any useful details."
-    			return table.concat(lines, "\n")
-    		end
-    
-    		context:Register("COPY_PATH",{Name = "Copy Path", IconMap = Explorer.LegacyClassIcons, Icon = 50, OnClick = function()
-    			local sList = selection.List
-    			if #sList == 1 then
-    				env.setclipboard(clth(Explorer.GetInstancePath(sList[1].Obj)))
-    			elseif #sList > 1 then
-    				local resList = {"{"}
-    				local count = 2
-    				for i = 1,#sList do
-    					local path = "\t"..clth(Explorer.GetInstancePath(sList[i].Obj))..","
-    					if #path > 0 then
-    						resList[count] = path
-    						count = count+1
-    					end
-    				end
-    				resList[count] = "}"
-    				env.setclipboard(table.concat(resList,"\n"))
-    			end
-    		end})
-    
-    		context:Register("COPY_TO_AI",{Name = "Copy to AI", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function()
-    			if env.setclipboard then
-    				env.setclipboard(buildAIPrompt())
-    			end
-    		end})
-    
-    		context:Register("INSERT_OBJECT",{Name = "Insert Object", IconMap = Explorer.MiscIcons, Icon = "InsertObject", OnClick = function()
-    			local mouse = Main.Mouse
-    			local x,y = Explorer.LastRightClickX or mouse.X, Explorer.LastRightClickY or mouse.Y
-    			Explorer.InsertObjectContext:Show(x,y)
-    		end})
-    
-    		--[[context:Register("CALL_FUNCTION",{Name = "Call Function", IconMap = Explorer.ClassIcons, Icon = 66, OnClick = function()
-    
-    		end})
-    
-    		context:Register("GET_REFERENCES",{Name = "Get Lua References", IconMap = Explorer.ClassIcons, Icon = 34, OnClick = function()
-    
-    		end})]]
-    
-    		context:Register("SAVE_INST",{Name = "Save to File", IconMap = Explorer.MiscIcons, Icon = "Save", OnClick = function()
-    			local sList = selection.List
-    			if #sList == 1 then
-    				Lib.SaveAsPrompt("Place_"..game.PlaceId.."_"..sList[1].Obj.ClassName.."_"..sList[1].Obj.Name.."_"..os.time(), function(filename)
-    					env.saveinstance(sList[1].Obj, filename, {
-    						Decompile = true,
-    						RemovePlayerCharacters = false
-    					})
-    				end)
-    			elseif #sList > 1 then
-    				for i = 1,#sList do
-    					-- sList[i].Obj.Name.." ("..sList[1].Obj.ClassName..")"
-    					-- "Place_"..game.PlaceId.."_"..sList[1].Obj.ClassName.."_"..sList[i].Obj.Name.."_"..os.time()
-    					Lib.SaveAsPrompt("Place_"..game.PlaceId.."_"..sList[i].Obj.ClassName.."_"..sList[i].Obj.Name.."_"..os.time(), function(filename)
-    						env.saveinstance(sList[i].Obj, filename, {
-    							Decompile = true,
-    							RemovePlayerCharacters = false
-    						})
-    					end)
-    
-    					task.wait(0.1)
-    				end
-    			end
-    		end})
-    
-            --[[context:Register("VIEW_CONNECTIONS",{Name = "View Connections", OnClick = function()
-    
-            end})]]
-    		local ClassFire = {
-    			RemoteEvent = "FireServer",
-    			RemoteFunction = "InvokeServer",
-    			UnreliableRemoteEvent = "FireServer",
-    
-    			BindableRemote = "Fire",
-    			BindableFunction = "Invoke",
+    		local menuData = {
+    			selection = selection,
+    			clipboard = clipboard,
+    			nodes = nodes,
+    			expanded = expanded,
+    			remote_blocklist = remote_blocklist,
+    			plr = plr,
+    			env = env,
+    			service = service,
+    			create = create,
+    			createSimple = createSimple,
+    			Explorer = Explorer,
+    			ensureTool = ensureTool,
+    
+    			-- Viewers / Apps
+    			Notepad = Notepad,
+    			ImageViewer = ImageViewer,
+    			SoundViewer = SoundViewer,
+    			AnimationViewer = AnimationViewer,
+    			ModelViewer = ModelViewer,
+    			ScriptRelations = ScriptRelations,
+    			ObjectLinks = ObjectLinks,
+    			DependencyGraph = DependencyGraph,
+    			RemoteUsageMap = RemoteUsageMap,
     		}
-    		context:Register("BLOCK_REMOTE",{Name = "Block From Firing", IconMap = Explorer.MiscIcons, Icon = "Delete", DisabledIcon = "Empty", OnClick = function()
-    			local sList = selection.List
-    			for i, list in sList do
-    				local obj = list.Obj
-    				if not remote_blocklist[obj] then
-    					local functionToHook = ClassFire[obj.ClassName]
-    					remote_blocklist[obj] = true
-    					local old; old = env.hookmetamethod((oldgame or game), "__namecall", function(self, ...)
-    						if remote_blocklist[obj] and self == obj and getnamecallmethod() == functionToHook then
-    							return nil
-    						end
-    						return old(self,...)
-    					end)
-    					if Settings.RemoteBlockWriteAttribute then
-    						obj:SetAttribute("IsBlocked", true)
-    					end
-    					--print("blocking ",functionToHook)
-    				end
-    			end
-    		end})
     
-    		context:Register("UNBLOCK_REMOTE",{Name = "Unblock", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
-    			local sList = selection.List
-    			for i, list in sList do
-    				local obj = list.Obj
-    				if remote_blocklist[obj] then
-    					remote_blocklist[obj] = nil
-    					if Settings.RemoteBlockWriteAttribute then
-    						list.Obj:SetAttribute("IsBlocked", false)
-    					end
-    					--print("unblocking ",functionToHook)
-    				end
-    			end
-    		end})
-    
-    		context:Register("VIEW_REMOTE_USAGE",{Name = "Remote Usage Map", IconMap = Explorer.MiscIcons, Icon = "ExploreData", DisabledIcon = "Empty", OnClick = function()
-    			local remote = selection.List[1] and selection.List[1].Obj
-    			if remote and ensureTool(RemoteUsageMap) then RemoteUsageMap.ShowForRemote(remote) end
-    		end})
-    
-    		context:Register("FIND_OBJECT_LINKS",{Name = "Find Links / References", IconMap = Explorer.MiscIcons, Icon = "ExploreData", DisabledIcon = "Empty", OnClick = function()
-    			local obj = selection.List[1] and selection.List[1].Obj
-    			if obj and ensureTool(ObjectLinks) then
-    				ObjectLinks.ShowForObject(obj)
-    			end
-    		end})
-    
-    		context:Register("VIEW_IMAGE_ASSETS",{Name = "View Images", IconMap = Explorer.MiscIcons, Icon = "ViewScript", DisabledIcon = "Empty", OnClick = function()
-    			local obj = selection.List[1] and selection.List[1].Obj
-    			if obj and ensureTool(ImageViewer) then ImageViewer.ShowForObject(obj) end
-    		end})
-    
-    		context:Register("VIEW_SOUND_ASSETS",{Name = "Preview Sound", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
-    			local obj = selection.List[1] and selection.List[1].Obj
-    			if obj and ensureTool(SoundViewer) then SoundViewer.ShowForObject(obj) end
-    		end})
-    
-    		context:Register("VIEW_ANIMATION_ASSETS",{Name = "Preview Animation", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
-    			local obj = selection.List[1] and selection.List[1].Obj
-    			if obj and ensureTool(AnimationViewer) then AnimationViewer.ShowForObject(obj) end
-    		end})
-    
-    		context:Register("COPY_API_PAGE",{Name = "Copy Roblox API Page URL", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function()
-    			local sList = selection.List
-    			if #sList == 1 then
-    				env.setclipboard(
-    					"https://create.roblox.com/docs/reference/engine/classes/"..sList[1].Obj.ClassName
-    				)
-    			end
-    		end})
-    
-    		context:Register("3DVIEW_MODEL",{Name = "3D Preview Object", IconMap = Explorer.LegacyClassIcons, Icon = 54, OnClick = function()
-    			local sList = selection.List
-    			local isa = game.IsA
-    
-    			if #sList == 1 then
-    				if (isa(sList[1].Obj,"BasePart") or isa(sList[1].Obj,"Model")) and ensureTool(ModelViewer) then
-    					ModelViewer.ViewModel(sList[1].Obj)
-    					return
-    				end
-    			end
-    		end})
-    
-    		context:Register("VIEW_OBJECT",{Name = "View Object (Right click to reset)", IconMap = Explorer.LegacyClassIcons, Icon = 5, OnClick = function()
-    			local sList = selection.List
-    			local isa = game.IsA
-    
-    			for i = 1,#sList do
-    				local node = sList[i]
-    
-    				if isa(node.Obj,"BasePart") or isa(node.Obj,"Model") then
-    					workspace.CurrentCamera.CameraSubject = node.Obj
-    					break
-    				end
-    			end
-    		end, OnRightClick = function()
-    			workspace.CurrentCamera.CameraSubject = plr.Character
-    		end})
-    
-    		context:Register("VIEW_SCRIPT",{Name = "View Script", IconMap = Explorer.MiscIcons, Icon = "ViewScript", DisabledIcon = "Empty", OnClick = function()
-    			local scr = selection.List[1] and selection.List[1].Obj
-    			if scr then Notepad.ViewScript(scr) end
-    		end})
-    		context:Register("VIEW_SCRIPT_RELATIONS",{Name = "Script Relations", IconMap = Explorer.MiscIcons, Icon = "SelectChildren", DisabledIcon = "Empty", OnClick = function()
-    			local scr = selection.List[1] and selection.List[1].Obj
-    			if scr and ensureTool(ScriptRelations) then ScriptRelations.ShowForScript(scr) end
-    		end})
-    		context:Register("VIEW_DEPENDENCY_GRAPH",{Name = "Script Dependency Graph", IconMap = Explorer.MiscIcons, Icon = "ExploreData", DisabledIcon = "Empty", OnClick = function()
-    			local scr = selection.List[1] and selection.List[1].Obj
-    			if scr and ensureTool(DependencyGraph) then DependencyGraph.ShowForScript(scr) end
-    		end})
-    		context:Register("DUMP_FUNCTIONS",{Name = "Dump Functions", IconMap = Explorer.MiscIcons, Icon = "SelectChildren", DisabledIcon = "Empty", OnClick = function()
-    			local scr = selection.List[1] and selection.List[1].Obj
-    			if scr then Notepad.DumpFunctions(scr) end
-    		end})
-    		context:Register("FUZZ_REMOTE",{Name = "Fuzz Remote", IconMap = Explorer.MiscIcons, Icon = "CallRemote", DisabledIcon = "Empty", OnClick = function()
-    			local remote = selection.List[1] and selection.List[1].Obj
-    			if remote and Apps.RemoteFuzzer then Apps.RemoteFuzzer.Generate(remote) end
-    		end})
-    		context:Register("TRACK_PROPERTIES",{Name = "Track Properties", IconMap = Explorer.MiscIcons, Icon = "CallFunction", DisabledIcon = "Empty", OnClick = function()
-    			local obj = selection.List[1] and selection.List[1].Obj
-    			if obj and ensureTool(Apps.PropertyTracker) then Apps.PropertyTracker.TrackInstance(obj) end
-    		end})
-    		context:Register("SERIALIZE_INSTANCE",{Name = "Serialize Instance", IconMap = Explorer.MiscIcons, Icon = "Reference", DisabledIcon = "Empty", OnClick = function()
-    			local obj = selection.List[1] and selection.List[1].Obj
-    			if obj and Apps.InstanceSerializer then Apps.InstanceSerializer.Serialize(obj) end
-    		end})
-    
-    		context:Register("FIRE_TOUCHTRANSMITTER",{Name = "Fire TouchTransmitter", OnClick = function()
-    			local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-    			if not hrp then return end
-    			for _, v in ipairs(selection.List) do if v.Obj and v.Obj:IsA("TouchTransmitter") then firetouchinterest(hrp, v.Obj.Parent, 0) end end
-    		end})
-    
-    		context:Register("FIRE_CLICKDETECTOR",{Name = "Fire ClickDetector", OnClick = function()
-    			local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-    			if not hrp then return end
-    			for _, v in ipairs(selection.List) do if v.Obj and v.Obj:IsA("ClickDetector") then fireclickdetector(v.Obj) end end
-    		end})
-    
-    		context:Register("FIRE_PROXIMITYPROMPT",{Name = "Fire ProximityPrompt", OnClick = function()
-    			local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-    			if not hrp then return end
-    			for _, v in ipairs(selection.List) do if v.Obj and v.Obj:IsA("ProximityPrompt") then fireproximityprompt(v.Obj) end end
-    		end})
-    
-    		context:Register("VIEW_SCRIPT",{Name = "View Script", IconMap = Explorer.MiscIcons, Icon = "ViewScript", DisabledIcon = "Empty", OnClick = function()
-    			local scr = selection.List[1] and selection.List[1].Obj
-    			if scr then Notepad.ViewScript(scr) end
-    		end})
-    
-    		context:Register("SAVE_SCRIPT",{Name = "Save Script", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
-    			for _, v in next, selection.List do
-    				if v.Obj:IsA("LuaSourceContainer") and env.isViableDecompileScript(v.Obj) then
-    					local success, source = pcall(env.decompile, v.Obj)
-    					if not success or not source then source = ("-- DEX - %s failed to decompile %s"):format(env.executor, v.Obj.ClassName) end
-    					local fileName = ("%s_%s_%i_Source.txt"):format(env.parsefile(v.Obj.Name), v.Obj.ClassName, game.PlaceId)
-    					--env.writefile(fileName, source)
-    					Lib.SaveAsPrompt(fileName, source)
-    
-    					task.wait(0.2)
-    				end
-    			end
-    		end})
-    
-    		context:Register("SYNC_TO_IDE",{Name = "Sync Script to IDE", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
-    			local idesync = Apps.IDESync
-    			if idesync then
-    				local list = {}
-    				for _, v in ipairs(selection.List) do
-    					if v.Obj then
-    						table.insert(list, v.Obj)
-    					end
-    				end
-    				if #list > 0 then
-    					idesync.ExportWorkspace(list)
-    				end
-    			else
-    				warn("IDE Sync app not loaded.")
-    			end
-    		end})
-    
-    		context:Register("SAVE_BYTECODE",{Name = "Save Script Bytecode", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
-    			for _, v in next, selection.List do
-    				if v.Obj:IsA("LuaSourceContainer") and env.isViableDecompileScript(v.Obj) then
-    					local success, bytecode = pcall(env.getscriptbytecode, v.Obj)
-    					if success and type(bytecode) == "string" then
-    						local fileName = ("%s_%s_%i_Bytecode.txt"):format(env.parsefile(v.Obj.Name), v.Obj.ClassName, game.PlaceId)
-    						--env.writefile(fileName, bytecode)
-    						Lib.SaveAsPrompt(fileName, bytecode)
-    						task.wait(0.2)
-    					end
-    				end
-    			end
-    		end})
-    
-    		context:Register("SELECT_CHARACTER",{Name = "Select Character", IconMap = Explorer.LegacyClassIcons, Icon = 9, OnClick = function()
-    			local newSelection = {}
-    			local count = 1
-    			local sList = selection.List
-    			local isa = game.IsA
-    
-    			for i = 1,#sList do
-    				local node = sList[i]
-    				if isa(node.Obj,"Player") and nodes[node.Obj.Character] then
-    					newSelection[count] = nodes[node.Obj.Character]
-    					count = count + 1
-    				end
-    			end
-    
-    			selection:SetTable(newSelection)
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			else
-    				Explorer.Refresh()
-    			end
-    		end})
-    
-    		context:Register("VIEW_PLAYER",{Name = "View Player", IconMap = Explorer.LegacyClassIcons, Icon = 5, OnClick = function()
-    			local newSelection = {}
-    			local count = 1
-    			local sList = selection.List
-    			local isa = game.IsA
-    
-    			for i = 1,#sList do
-    				local node = sList[i]
-    				local Obj = node.Obj
-    				if Obj:IsA("Player") and Obj.Character then
-    					workspace.CurrentCamera.CameraSubject = Obj.Character
-    					break
-    				end
-    			end
-    		end})
-    
-    		context:Register("SELECT_LOCAL_PLAYER",{Name = "Select Local Player", IconMap = Explorer.LegacyClassIcons, Icon = 9, OnClick = function()
-    			pcall(function() if nodes[plr] then selection:Set(nodes[plr]) Explorer.ViewNode(nodes[plr]) end end)
-    		end})
-    
-    		context:Register("SELECT_ALL_CHARACTERS",{Name = "Select All Characters", IconMap = Explorer.LegacyClassIcons, Icon = 2, OnClick = function()
-    			local newSelection = {}
-    			local sList = selection.List
-    
-    			for i,v in next, service.Players:GetPlayers() do
-    				if v.Character and nodes[v.Character] then
-    					if i == 1 then Explorer.MakeNodeVisible(v.Character) end
-    					table.insert(newSelection, nodes[v.Character])
-    				end
-    			end
-    
-    			selection:SetTable(newSelection)
-    			if #newSelection > 0 then
-    				Explorer.ViewNode(newSelection[1])
-    			else
-    				Explorer.Refresh()
-    			end
-    		end})
-    
-    		context:Register("REFRESH_NIL",{Name = "Refresh Nil Instances", OnClick = function()
-    			Explorer.RefreshNilInstances()
-    		end})
-    
-    		context:Register("HIDE_NIL",{Name = "Hide Nil Instances", OnClick = function()
-    			Explorer.HideNilInstances()
-    		end})
+    		-- Execute modular submenu registrations
+    		if Apps.EditMenu then Apps.EditMenu(context, menuData) end
+    		if Apps.NavigationMenu then Apps.NavigationMenu(context, menuData) end
+    		if Apps.ObjectMenu then Apps.ObjectMenu(context, menuData) end
+    		if Apps.ScriptMenu then Apps.ScriptMenu(context, menuData) end
+    		if Apps.InteractionMenu then Apps.InteractionMenu(context, menuData) end
+    		if Apps.PlayerMenu then Apps.PlayerMenu(context, menuData) end
+    		if Apps.NilInstanceMenu then Apps.NilInstanceMenu(context, menuData) end
     
     		Explorer.RightClickContext = context
     	end
@@ -11819,6 +11048,153 @@ end,
     		window.OnDeactivate:Connect(function() Explorer.Active = false end)
     		window.OnMinimize:Connect(function() Explorer.Active = false end)
     
+    		local viewportBeganCon = nil
+    		local viewportEndedCon = nil
+    		local mouseBehaviorCon = nil
+    
+    		Explorer.UpdateViewportListener = function()
+    			if viewportBeganCon then viewportBeganCon:Disconnect() viewportBeganCon = nil end
+    			if viewportEndedCon then viewportEndedCon:Disconnect() viewportEndedCon = nil end
+    			if mouseBehaviorCon then mouseBehaviorCon:Disconnect() mouseBehaviorCon = nil end
+    
+    			if not Settings.Explorer.ViewportContextMenuEnabled then return end
+    
+    			local mouse = Main.Mouse or plr:GetMouse()
+    			local uis = service.UserInputService
+    			local clickStartTime = 0
+    			local clickStartPos = Vector3.zero
+    
+    			local function isOverDexGui()
+    				local playerGui = plr:FindFirstChildOfClass("PlayerGui")
+    				if not playerGui or not playerGui.GetGuiObjectsAtPosition then return false end
+    				local pos = uis:GetMouseLocation()
+    				local objects = playerGui:GetGuiObjectsAtPosition(pos.X, pos.Y)
+    				for i = 1, #objects do
+    					local obj = objects[i]
+    					local screenGui = obj:FindFirstAncestorOfClass("ScreenGui")
+    					if screenGui then
+    						local name = screenGui.Name
+    						if name == "Dex" or name == "Context" or name == "ExplorerSelections" or name == "ModelViewer" or name == "ImageViewer" or name == "SoundViewer" or name == "AnimationViewer" or name == "Settings" or name == "Notepad" or name == "Console" or name == "ControlCenter" or name == "IDESync" or name == "InspectorHub" or name == "TaskRouter" or name == "SecurityAuditor" or name == "RuntimeInspector" or name == "ClientIntelligence" then
+    							return true
+    						end
+    					end
+    				end
+    				return false
+    			end
+    
+    			local function triggerSelect(position)
+    				if isOverDexGui() then return end
+    
+    				local target = mouse.Target
+    				if target then
+    					local targetNode = nodes[target]
+    					local current = target
+    					while not targetNode and current and current ~= game do
+    						current = current.Parent
+    						targetNode = nodes[current]
+    					end
+    					if targetNode then
+    						selection:Set(targetNode)
+    						Explorer.ViewNode(targetNode)
+    						Explorer.Refresh()
+    
+    						Explorer.ShowViewportRightClick(position, targetNode.Obj)
+    					end
+    				end
+    			end
+    
+    			local triggerType = Settings.Explorer.ViewportContextMenuTrigger
+    			local targetButton = (triggerType == "Right Click") and Enum.UserInputType.MouseButton2 or Enum.UserInputType.MouseButton3
+    
+    			local mouseWasLocked = uis.MouseBehavior == Enum.MouseBehavior.LockCenter or uis.MouseBehavior == Enum.MouseBehavior.LockCurrentPosition
+    
+    			local function updateMouseLockedState()
+    				if not uis:IsMouseButtonPressed(targetButton) then
+    					mouseWasLocked = (uis.MouseBehavior == Enum.MouseBehavior.LockCenter or uis.MouseBehavior == Enum.MouseBehavior.LockCurrentPosition)
+    				end
+    			end
+    
+    			mouseBehaviorCon = uis:GetPropertyChangedSignal("MouseBehavior"):Connect(updateMouseLockedState)
+    
+    			viewportBeganCon = uis.InputBegan:Connect(function(input, processed)
+    				if input.UserInputType == targetButton then
+    					clickStartTime = os.clock()
+    					clickStartPos = input.Position
+    				end
+    			end)
+    
+    			viewportEndedCon = uis.InputEnded:Connect(function(input, processed)
+    				if input.UserInputType == targetButton then
+    					if mouseWasLocked then return end
+    
+    					if triggerType == "Middle Click" then
+    						triggerSelect(input.Position)
+    					elseif triggerType == "Right Click" then
+    						local duration = os.clock() - clickStartTime
+    						local delta = (input.Position - clickStartPos).Magnitude
+    						if duration < 0.25 and delta < 10 then
+    							triggerSelect(input.Position)
+    						end
+    					end
+    				end
+    			end)
+    		end
+    
+    		Explorer.ShowViewportRightClick = function(MousePos, targetObj)
+    			local Mouse = MousePos or Main.Mouse
+    			local context = Explorer.RightClickContext
+    			local absoluteSize = context.Gui.AbsoluteSize
+    			context.MaxHeight = (absoluteSize.Y <= 600 and (absoluteSize.Y - 40)) or nil
+    			context:Clear()
+    
+    			local sList = selection.List
+    			local sMap = selection.Map
+    
+    			local parentObj = targetObj.Parent
+    			if parentObj and parentObj ~= workspace and parentObj ~= game then
+    				context:Add({
+    					Name = "Select Parent (" .. parentObj.Name .. ")",
+    					IconMap = Explorer.MiscIcons,
+    					Icon = "JumpToParent",
+    					OnClick = function()
+    						local parentNode = nodes[parentObj]
+    						if parentNode then
+    							selection:Set(parentNode)
+    							Explorer.ViewNode(parentNode)
+    							Explorer.Refresh()
+    						end
+    					end
+    				})
+    				context:AddDivider()
+    			end
+    
+    			context:Add({
+    				Name = "Focus in Explorer",
+    				IconMap = Explorer.MiscIcons,
+    				Icon = "ExploreData",
+    				OnClick = function()
+    					local node = nodes[targetObj]
+    					if node then
+    						Explorer.ViewNode(node)
+    						Explorer.Refresh()
+    					end
+    				end
+    			})
+    
+    			context:AddRegistered("COPY_PATH")
+    
+    			context:AddDivider("Tools")
+    			context:AddRegistered("3DVIEW_MODEL")
+    			context:AddRegistered("COPY_PROPERTIES")
+    			context:AddRegistered("PASTE_PROPERTIES", not Apps.PropertyCopier or not Apps.PropertyCopier.HasCache())
+    
+    			context:AddDivider("Actions")
+    			context:AddRegistered("DELETE")
+    
+    			Explorer.LastRightClickX, Explorer.LastRightClickY = Mouse.X, Mouse.Y
+    			context:Show(Mouse.X, Mouse.Y)
+    		end
+    
     		-- Settings
     		autoUpdateSearch = Settings.Explorer.AutoUpdateSearch
     
@@ -11835,6 +11211,7 @@ end,
     		nodes[capturedNode.Obj] = capturedNode
     
     		Explorer.SetupConnections()
+    		Explorer.UpdateViewportListener()
     
     		local insts = getDescendants(game)
     		local buildYieldAt = os.clock() + 0.02
@@ -11912,6 +11289,986 @@ end,
     end
     
     return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
+end,
+["EditMenu"] = function()
+    --!strict
+    --[[
+    	Edit Menu Module
+    	Registers clipboard and item mutation commands (Cut, Copy, Paste, Duplicate, Delete, Rename).
+    ]]
+    local Main, Lib, Apps, Settings
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	return function(context, data)
+    		local selection = data.selection
+    		local clipboard = data.clipboard
+    		local nodes = data.nodes
+    		local Explorer = data.Explorer
+    
+    		context:Register("CUT",{Name = "Cut", IconMap = Explorer.MiscIcons, Icon = "Cut", DisabledIcon = "Cut_Disabled", Shortcut = "Ctrl+Z", OnClick = function()
+    			if Apps.Clipboard then
+    				Apps.Clipboard.Cut(selection.List, selection)
+    			end
+    		end})
+    
+    		context:Register("COPY",{Name = "Copy", IconMap = Explorer.MiscIcons, Icon = "Copy", DisabledIcon = "Copy_Disabled", Shortcut = "Ctrl+C", OnClick = function()
+    			if Apps.Clipboard then
+    				Apps.Clipboard.Copy(selection.List)
+    			end
+    		end})
+    
+    		context:Register("PASTE",{Name = "Paste Into", IconMap = Explorer.MiscIcons, Icon = "Paste", DisabledIcon = "Paste_Disabled", Shortcut = "Ctrl+Shift+V", OnClick = function()
+    			if Apps.Clipboard then
+    				Apps.Clipboard.Paste(selection.List, nodes, selection, Explorer.ViewNode, Explorer.MakeNodeVisible)
+    			end
+    		end})
+    
+    		context:Register("DUPLICATE",{Name = "Duplicate", IconMap = Explorer.MiscIcons, Icon = "Copy", DisabledIcon = "Copy_Disabled", Shortcut = "Ctrl+D", OnClick = function()
+    			if Apps.Duplicate then
+    				Apps.Duplicate.Execute(selection.List, nodes, selection, Explorer.ViewNode, Explorer.MakeNodeVisible)
+    			end
+    		end})
+    
+    		context:Register("DELETE",{Name = "Delete", IconMap = Explorer.MiscIcons, Icon = "Delete", DisabledIcon = "Delete_Disabled", Shortcut = "Del", OnClick = function()
+    			if Apps.Deletion then
+    				Apps.Deletion.Delete(selection.List, selection)
+    			end
+    		end})
+    
+    		context:Register("DELETE_CHILDREN",{Name = "Delete Children", IconMap = Explorer.MiscIcons, Icon = "Delete", DisabledIcon = "Delete_Disabled", Shortcut = "Shift+Del", OnClick = function()
+    			if Apps.Deletion then
+    				Apps.Deletion.DeleteChildren(selection.List)
+    			end
+    			selection:Clear()
+    		end})
+    
+    		context:Register("RENAME",{Name = "Rename", IconMap = Explorer.MiscIcons, Icon = "Rename", DisabledIcon = "Rename_Disabled", Shortcut = "F2", OnClick = function()
+    			if Apps.Rename then
+    				Apps.Rename.Execute(selection.List, Explorer.SetRenamingNode)
+    			end
+    		end})
+    	end
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["NavigationMenu"] = function()
+    --!strict
+    --[[
+    	Navigation Menu Module
+    	Registers navigation, viewport positioning, and grouping commands.
+    ]]
+    local Main, Lib, Apps, Settings
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	return function(context, data)
+    		local selection = data.selection
+    		local nodes = data.nodes
+    		local expanded = data.expanded
+    		local plr = data.plr
+    		local Explorer = data.Explorer
+    
+    		context:Register("GROUP",{Name = "Group", IconMap = Explorer.MiscIcons, Icon = "Group", DisabledIcon = "Group_Disabled", Shortcut = "Ctrl+G", OnClick = function()
+    			local sList = selection.List
+    			if #sList == 0 then return end
+    
+    			local model = Instance.new("Model",sList[#sList].Obj.Parent)
+    			for i = 1,#sList do
+    				pcall(function() sList[i].Obj.Parent = model end)
+    			end
+    
+    			if nodes[model] then
+    				selection:Set(nodes[model])
+    				Explorer.ViewNode(nodes[model])
+    			end
+    		end})
+    
+    		context:Register("UNGROUP",{Name = "Ungroup", IconMap = Explorer.MiscIcons, Icon = "Ungroup", DisabledIcon = "Ungroup_Disabled", Shortcut = "Ctrl+U", OnClick = function()
+    			local newSelection = {}
+    			local count = 1
+    			local isa = game.IsA
+    
+    			local function ungroup(node)
+    				local par = node.Parent.Obj
+    				local ch = {}
+    				local chCount = 1
+    
+    				for i = 1,#node do
+    					local n = node[i]
+    					newSelection[count] = n
+    					ch[chCount] = n
+    					count = count + 1
+    					chCount = chCount + 1
+    				end
+    
+    				for i = 1,#ch do
+    					pcall(function() ch[i].Obj.Parent = par end)
+    				end
+    
+    				node.Obj:Destroy()
+    			end
+    
+    			for i,v in next,selection.List do
+    				if isa(v.Obj,"Model") then
+    					ungroup(v)
+    				end
+    			end
+    
+    			selection:SetTable(newSelection)
+    			if #newSelection > 0 then
+    				Explorer.ViewNode(newSelection[1])
+    			end
+    		end})
+    
+    		context:Register("SELECT_CHILDREN",{Name = "Select Children", IconMap = Explorer.MiscIcons, Icon = "SelectChildren", DisabledIcon = "SelectChildren_Disabled", OnClick = function()
+    			local newSelection = {}
+    			local count = 1
+    			local sList = selection.List
+    
+    			for i = 1,#sList do
+    				local node = sList[i]
+    				for ind = 1,#node do
+    					local cNode = node[ind]
+    					if ind == 1 then Explorer.MakeNodeVisible(cNode) end
+    
+    					newSelection[count] = cNode
+    					count = count + 1
+    				end
+    			end
+    
+    			selection:SetTable(newSelection)
+    			if #newSelection > 0 then
+    				Explorer.ViewNode(newSelection[1])
+    			else
+    				Explorer.Refresh()
+    			end
+    		end})
+    
+    		context:Register("JUMP_TO_PARENT",{Name = "Jump to Parent", IconMap = Explorer.MiscIcons, Icon = "JumpToParent", OnClick = function()
+    			local newSelection = {}
+    			local count = 1
+    			local sList = selection.List
+    
+    			for i = 1,#sList do
+    				local node = sList[i]
+    				if node.Parent then
+    					newSelection[count] = node.Parent
+    					count = count + 1
+    				end
+    			end
+    
+    			selection:SetTable(newSelection)
+    			if #newSelection > 0 then
+    				Explorer.ViewNode(newSelection[1])
+    			else
+    				Explorer.Refresh()
+    			end
+    		end})
+    
+    		context:Register("EXPAND_ALL",{Name = "Expand All", OnClick = function()
+    			local sList = selection.List
+    
+    			local function expand(node)
+    				expanded[node] = true
+    				for i = 1,#node do
+    					if #node[i] > 0 then
+    						expand(node[i])
+    					end
+    				end
+    			end
+    
+    			for i = 1,#sList do
+    				expand(sList[i])
+    			end
+    
+    			Explorer.ForceUpdate()
+    		end})
+    
+    		context:Register("COLLAPSE_ALL",{Name = "Collapse All", OnClick = function()
+    			local sList = selection.List
+    
+    			local function expand(node)
+    				expanded[node] = nil
+    				for i = 1,#node do
+    					if #node[i] > 0 then
+    						expand(node[i])
+    					end
+    				end
+    			end
+    
+    			for i = 1,#sList do
+    				expand(sList[i])
+    			end
+    
+    			Explorer.ForceUpdate()
+    		end})
+    
+    		context:Register("TELEPORT_TO",{Name = "Teleport To", IconMap = Explorer.MiscIcons, Icon = "TeleportTo", OnClick = function()
+    			local sList = selection.List
+    			local plrRP = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    
+    			if not plrRP then return end
+    
+    			for _,node in next, sList do
+    				local Obj = node.Obj
+    
+    				if Obj:IsA("BasePart") then
+    					if Obj.CanCollide then
+    						plr.Character:MoveTo(Obj.Position)
+    					else
+    						plrRP.CFrame = CFrame.new(Obj.Position + Settings.Explorer.TeleportToOffset)
+    					end
+    					break
+    				elseif Obj:IsA("Model") then
+    					if Obj.PrimaryPart then
+    						if Obj.PrimaryPart.CanCollide then
+    							plr.Character:MoveTo(Obj.PrimaryPart.Position)
+    						else
+    							plrRP.CFrame = CFrame.new(Obj.PrimaryPart.Position + Settings.Explorer.TeleportToOffset)
+    						end
+    						break
+    					else
+    						local part = Obj:FindFirstChildWhichIsA("BasePart", true)
+    						if part and nodes[part] then
+    							if part.CanCollide then
+    								plr.Character:MoveTo(part.Position)
+    							else
+    								plrRP.CFrame = CFrame.new(part.Position + Settings.Explorer.TeleportToOffset)
+    							end
+    							break
+    						elseif Obj.WorldPivot then
+    							plrRP.CFrame = Obj.WorldPivot
+    						end
+    					end
+    				end
+    			end
+    		end})
+    
+    		context:Register("VIEW_OBJECT",{Name = "View Object (Right click to reset)", IconMap = Explorer.LegacyClassIcons, Icon = 5, OnClick = function()
+    			local sList = selection.List
+    			local isa = game.IsA
+    
+    			for i = 1,#sList do
+    				local node = sList[i]
+    
+    				if isa(node.Obj,"BasePart") or isa(node.Obj,"Model") then
+    					workspace.CurrentCamera.CameraSubject = node.Obj
+    					break
+    				end
+    			end
+    		end, OnRightClick = function()
+    			pcall(function()
+    				local camera = workspace.CurrentCamera
+    				if camera then
+    					local character = plr.Character
+    					local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    					if humanoid then
+    						camera.CameraSubject = humanoid
+    					elseif character then
+    						camera.CameraSubject = character
+    					end
+    				end
+    			end)
+    		end})
+    	end
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["ObjectMenu"] = function()
+    --!strict
+    --[[
+    	Object Menu Module
+    	Registers asset-related tools, exporters, serializers, and general object metadata options.
+    ]]
+    local Main, Lib, Apps, Settings
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	return function(context, data)
+    		local selection = data.selection
+    		local Explorer = data.Explorer
+    		local env = data.env
+    		local service = data.service
+    		local ensureTool = data.ensureTool
+    		local ImageViewer = data.ImageViewer
+    		local SoundViewer = data.SoundViewer
+    		local AnimationViewer = data.AnimationViewer
+    		local ModelViewer = data.ModelViewer
+    		local ObjectLinks = data.ObjectLinks
+    		local nodes = data.nodes
+    
+    		local clth = function(str)
+    			if str:sub(1, 28) == "game:GetService(\"Workspace\")" then str = str:gsub("game:GetService%(\"Workspace\"%)", "workspace", 1) end
+    			local plr = data.plr
+    			if str:sub(1, 27 + #plr.Name) == "game:GetService(\"Players\")." .. plr.Name then str = str:gsub("game:GetService%(\"Players\"%)." .. plr.Name, "game:GetService(\"Players\").LocalPlayer", 1) end
+    			return str
+    		end
+    
+    		local function summarizeForAI(obj)
+    			local lines = {}
+    			local function push(text)
+    				lines[#lines + 1] = text
+    			end
+    			local function compactSourceAnalysis(analysis)
+    				if type(analysis) ~= "string" or analysis == "" then return nil end
+    				local httpService = service and service.HttpService
+    				if not httpService then
+    					local ok, resolved = pcall(game.GetService, game, "HttpService")
+    					if ok then httpService = resolved end
+    				end
+    				if not httpService then return analysis end
+    				local ok, decoded = pcall(function()
+    					return httpService:JSONDecode(analysis)
+    				end)
+    				if not ok or type(decoded) ~= "table" then return analysis end
+    
+    				local parts = {}
+    				if decoded.lines then parts[#parts + 1] = tostring(decoded.lines) .. " lines" end
+    				if decoded.functions then parts[#parts + 1] = tostring(decoded.functions) .. " functions" end
+    				if decoded.requires then parts[#parts + 1] = tostring(decoded.requires) .. " requires" end
+    				if decoded.remoteCalls then parts[#parts + 1] = tostring(decoded.remoteCalls) .. " remote calls" end
+    				if decoded.riskySignals then parts[#parts + 1] = tostring(decoded.riskySignals) .. " risky signals" end
+    				if type(decoded.topIdentifiers) == "table" and #decoded.topIdentifiers > 0 then
+    					local ids = {}
+    					for i = 1, math.min(#decoded.topIdentifiers, 5) do
+    						ids[#ids + 1] = tostring(decoded.topIdentifiers[i])
+    					end
+    					parts[#parts + 1] = "top identifiers: " .. table.concat(ids, ", ")
+    				end
+    				return table.concat(parts, " | ")
+    			end
+    			local okPath, path = pcall(function()
+    				return Explorer.GetInstancePath(obj)
+    			end)
+    			push("- " .. (okPath and clth(tostring(path)) or obj:GetFullName()) .. " [" .. obj.ClassName .. "]")
+    			push("  Parent: " .. (obj.Parent and clth(tostring(Explorer.GetInstancePath(obj.Parent))) or "nil"))
+    
+    			local children = obj:GetChildren()
+    			local scriptCount, remoteCount, partCount = 0, 0, 0
+    			local notable = {}
+    			for _, child in ipairs(children) do
+    				if child:IsA("LuaSourceContainer") then
+    					scriptCount += 1
+    					if #notable < 5 then notable[#notable + 1] = child.Name .. " [" .. child.ClassName .. "]" end
+    				elseif child:IsA("BasePart") then
+    					partCount += 1
+    				elseif child:IsA("RemoteEvent") or child:IsA("RemoteFunction") or child:IsA("UnreliableRemoteEvent") or child:IsA("BindableEvent") or child:IsA("BindableFunction") then
+    					remoteCount += 1
+    					if #notable < 5 then notable[#notable + 1] = child.Name .. " [" .. child.ClassName .. "]" end
+    				end
+    			end
+    			push(("  Children: %d | scripts: %d | remotes/bindables: %d | parts: %d"):format(#children, scriptCount, remoteCount, partCount))
+    			if #notable > 0 then
+    				push("  Notable children: " .. table.concat(notable, ", "))
+    			end
+    
+    			if obj:IsA("BasePart") then
+    				push(("  BasePart: Anchored=%s CanCollide=%s Transparency=%s"):format(tostring(obj.Anchored), tostring(obj.CanCollide), tostring(obj.Transparency)))
+    			end
+    			if obj:IsA("Model") then
+    				push("  Model: PrimaryPart=" .. tostring(obj.PrimaryPart and obj.PrimaryPart.Name or "nil"))
+    			end
+    			if obj:IsA("LuaSourceContainer") then
+    				if obj:IsA("Script") or obj:IsA("LocalScript") then
+    					push("  RunContext: " .. tostring(obj.RunContext))
+    				end
+    				if env.isViableDecompileScript then
+    					push("  Decompileable: " .. tostring(env.isViableDecompileScript(obj)))
+    				end
+    				if env.DecompileCache and env.DecompileCache.Read and env.HelperServer and env.HelperServer.AnalyzeSource then
+    					local cacheOk, cachedSource = pcall(env.DecompileCache.Read, obj)
+    					if cacheOk and type(cachedSource) == "string" then
+    						local helperOk, analysis = pcall(env.HelperServer.AnalyzeSource, cachedSource)
+    						if helperOk and type(analysis) == "string" and #analysis > 0 then
+    							push("  Cached source analysis: " .. (compactSourceAnalysis(analysis) or analysis))
+    						end
+    					end
+    				end
+    			end
+    			return table.concat(lines, "\n")
+    		end
+    
+    		local function buildAIPrompt()
+    			local sList = selection and selection.List or {}
+    			local lines = {
+    				"You are helping me inspect Roblox objects in DEX++.",
+    				"I am a beginner, so explain in simple language and keep jargon low.",
+    				"",
+    				"Goal:",
+    				"- Tell me what this selection likely does.",
+    				"- Point out which scripts, remotes, or nearby objects matter most.",
+    				"- If edits are needed, give short step-by-step guidance I can follow.",
+    				"",
+    				"Selection summary:",
+    				("Count: %d"):format(#sList),
+    			}
+    			for i = 1, math.min(#sList, 6) do
+    				if sList[i] and sList[i].Obj then
+    					lines[#lines + 1] = summarizeForAI(sList[i].Obj)
+    				end
+    			end
+    			if #sList > 6 then
+    				lines[#lines + 1] = ("... and %d more selected object(s)."):format(#sList - 6)
+    			end
+    			local taskText = table.concat(lines, "\n")
+    			if Apps.TaskRouter and Apps.TaskRouter.RouteTask then
+    				local ok, decision, sourceKind = pcall(Apps.TaskRouter.RouteTask, taskText)
+    				if ok and decision and decision.primary then
+    					local primary = decision.primary
+    					local secondary = decision.secondary or {}
+    					lines[#lines + 1] = ""
+    					lines[#lines + 1] = "Role recommendation:"
+    					lines[#lines + 1] = ("- Primary: %s [%s] -> %s"):format(
+    						tostring(primary.label or "Unknown"),
+    						tostring(primary.language or "Unknown"),
+    						tostring(primary.module or "Unknown")
+    					)
+    					lines[#lines + 1] = ("- Confidence: %s%% | Source: %s"):format(tostring(primary.confidence or 0), tostring(sourceKind or "local"))
+    					lines[#lines + 1] = ("- Why: %s"):format(tostring(primary.summary or ""))
+    					if secondary.label then
+    						lines[#lines + 1] = ("- Fallback: %s [%s] -> %s"):format(
+    							tostring(secondary.label or "Unknown"),
+    							tostring(secondary.language or "Unknown"),
+    							tostring(secondary.module or "Unknown")
+    						)
+    					end
+    					if decision.workflow then
+    						for i = 1, math.min(3, #decision.workflow) do
+    							lines[#lines + 1] = "- " .. tostring(decision.workflow[i])
+    						end
+    					end
+    				end
+    			end
+    			lines[#lines + 1] = ""
+    			lines[#lines + 1] = "Helpful DEX++ tools already available:"
+    			lines[#lines + 1] = "- Object Links / Reference Inspector"
+    			lines[#lines + 1] = "- Script Relations / Dependency Graph"
+    			lines[#lines + 1] = "- Remote Usage Map / Runtime Inspector"
+    			lines[#lines + 1] = "- Code Search / Smart Search"
+    			lines[#lines + 1] = ""
+    			lines[#lines + 1] = "Answer with the best next actions first, then any useful details."
+    			return table.concat(lines, "\n")
+    		end
+    
+    		context:Register("COPY_PATH",{Name = "Copy Path", IconMap = Explorer.LegacyClassIcons, Icon = 50, OnClick = function()
+    			local sList = selection.List
+    			if #sList == 1 then
+    				env.setclipboard(clth(Explorer.GetInstancePath(sList[1].Obj)))
+    			elseif #sList > 1 then
+    				local resList = {"{"}
+    				local count = 2
+    				for i = 1,#sList do
+    					local path = "\t"..clth(Explorer.GetInstancePath(sList[i].Obj))..","
+    					if #path > 0 then
+    						resList[count] = path
+    						count = count+1
+    					end
+    				end
+    				resList[count] = "}"
+    				env.setclipboard(table.concat(resList,"\n"))
+    			end
+    		end})
+    
+    		context:Register("COPY_TO_AI",{Name = "Copy to AI", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function()
+    			if env.setclipboard then
+    				env.setclipboard(buildAIPrompt())
+    			end
+    		end})
+    
+    		context:Register("INSERT_OBJECT",{Name = "Insert Object", IconMap = Explorer.MiscIcons, Icon = "InsertObject", OnClick = function()
+    			local mouse = Main.Mouse
+    			local x,y = Explorer.LastRightClickX or mouse.X, Explorer.LastRightClickY or mouse.Y
+    			Explorer.InsertObjectContext:Show(x,y)
+    		end})
+    
+    		context:Register("SAVE_INST",{Name = "Save to File", IconMap = Explorer.MiscIcons, Icon = "Save", OnClick = function()
+    			local sList = selection.List
+    			if #sList == 1 then
+    				Lib.SaveAsPrompt("Place_"..game.PlaceId.."_"..sList[1].Obj.ClassName.."_"..sList[1].Obj.Name.."_"..os.time(), function(filename)
+    					env.saveinstance(sList[1].Obj, filename, {
+    						Decompile = true,
+    						RemovePlayerCharacters = false
+    					})
+    				end)
+    			elseif #sList > 1 then
+    				for i = 1,#sList do
+    					Lib.SaveAsPrompt("Place_"..game.PlaceId.."_"..sList[i].Obj.ClassName.."_"..sList[i].Obj.Name.."_"..os.time(), function(filename)
+    						env.saveinstance(sList[i].Obj, filename, {
+    							Decompile = true,
+    							RemovePlayerCharacters = false
+    						})
+    					end)
+    
+    					task.wait(0.1)
+    				end
+    			end
+    		end})
+    
+    		context:Register("VIEW_IMAGE_ASSETS",{Name = "View Images", IconMap = Explorer.MiscIcons, Icon = "ViewScript", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			if obj and ensureTool(ImageViewer) then ImageViewer.ShowForObject(obj) end
+    		end})
+    
+    		context:Register("VIEW_SOUND_ASSETS",{Name = "Preview Sound", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			if obj and ensureTool(SoundViewer) then SoundViewer.ShowForObject(obj) end
+    		end})
+    
+    		context:Register("VIEW_ANIMATION_ASSETS",{Name = "Preview Animation", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			if obj and ensureTool(AnimationViewer) then AnimationViewer.ShowForObject(obj) end
+    		end})
+    
+    		context:Register("3DVIEW_MODEL",{Name = "3D Preview Object", IconMap = Explorer.LegacyClassIcons, Icon = 54, OnClick = function()
+    			local sList = selection.List
+    			local isa = game.IsA
+    
+    			if #sList == 1 then
+    				if (isa(sList[1].Obj,"BasePart") or isa(sList[1].Obj,"Model")) and ensureTool(ModelViewer) then
+    					ModelViewer.ViewModel(sList[1].Obj)
+    					return
+    				end
+    			end
+    		end})
+    
+    		context:Register("COPY_API_PAGE",{Name = "Copy Roblox API Page URL", IconMap = Explorer.MiscIcons, Icon = "Reference", OnClick = function()
+    			local sList = selection.List
+    			if #sList == 1 then
+    				env.setclipboard(
+    					"https://create.roblox.com/docs/reference/engine/classes/"..sList[1].Obj.ClassName
+    				)
+    			end
+    		end})
+    
+    		context:Register("FIND_OBJECT_LINKS",{Name = "Find Links / References", IconMap = Explorer.MiscIcons, Icon = "ExploreData", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			if obj and ensureTool(ObjectLinks) then
+    				ObjectLinks.ShowForObject(obj)
+    			end
+    		end})
+    
+    		context:Register("TRACK_PROPERTIES",{Name = "Track Properties", IconMap = Explorer.MiscIcons, Icon = "CallFunction", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			local PropertyTracker = Apps.PropertyTracker
+    			if obj and ensureTool(PropertyTracker) then PropertyTracker.TrackInstance(obj) end
+    		end})
+    
+    		context:Register("SERIALIZE_INSTANCE",{Name = "Serialize Instance", IconMap = Explorer.MiscIcons, Icon = "Reference", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			local InstanceSerializer = Apps.InstanceSerializer
+    			if obj and ensureTool(InstanceSerializer) then InstanceSerializer.ShowForObject(obj) end
+    		end})
+    
+    		context:Register("COPY_PROPERTIES",{Name = "Copy Properties", IconMap = Explorer.MiscIcons, Icon = "Copy", DisabledIcon = "Empty", OnClick = function()
+    			local obj = selection.List[1] and selection.List[1].Obj
+    			local PropertyCopier = Apps.PropertyCopier
+    			if obj and PropertyCopier then PropertyCopier.Copy(obj) end
+    		end})
+    
+    		context:Register("PASTE_PROPERTIES",{Name = "Paste Properties", IconMap = Explorer.MiscIcons, Icon = "Paste", DisabledIcon = "Empty", OnClick = function()
+    			local PropertyCopier = Apps.PropertyCopier
+    			if PropertyCopier and PropertyCopier.HasCache() then
+    				for i = 1,#selection.List do
+    					local obj = selection.List[i].Obj
+    					if obj then PropertyCopier.Paste(obj) end
+    				end
+    			end
+    		end})
+    	end
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["ScriptMenu"] = function()
+    --strict
+    --[[
+    	Script Menu Module
+    	Registers decompilation, script relationship inspectors, and IDE sync commands.
+    ]]
+    local Main, Lib, Apps, Settings
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	return function(context, data)
+    		local selection = data.selection
+    		local Explorer = data.Explorer
+    		local env = data.env
+    		local ensureTool = data.ensureTool
+    		local Notepad = data.Notepad
+    		local ScriptRelations = data.ScriptRelations
+    		local DependencyGraph = data.DependencyGraph
+    
+    		context:Register("VIEW_SCRIPT",{Name = "View Script", IconMap = Explorer.MiscIcons, Icon = "ViewScript", DisabledIcon = "Empty", OnClick = function()
+    			local scr = selection.List[1] and selection.List[1].Obj
+    			if scr then Notepad.ViewScript(scr) end
+    		end})
+    
+    		context:Register("SAVE_SCRIPT",{Name = "Save Script", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
+    			for _, v in next, selection.List do
+    				if v.Obj:IsA("LuaSourceContainer") and env.isViableDecompileScript(v.Obj) then
+    					local success, source = pcall(env.decompile, v.Obj)
+    					if not success or not source then source = ("-- DEX - %s failed to decompile %s"):format(env.executor, v.Obj.ClassName) end
+    					local fileName = ("%s_%s_%i_Source.txt"):format(env.parsefile(v.Obj.Name), v.Obj.ClassName, game.PlaceId)
+    					Lib.SaveAsPrompt(fileName, source)
+    
+    					task.wait(0.2)
+    				end
+    			end
+    		end})
+    
+    		context:Register("SYNC_TO_IDE",{Name = "Sync Script to IDE", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
+    			local idesync = Apps.IDESync
+    			if idesync then
+    				local list = {}
+    				for _, v in ipairs(selection.List) do
+    					if v.Obj then
+    						table.insert(list, v.Obj)
+    					end
+    				end
+    				if #list > 0 then
+    					idesync.ExportWorkspace(list)
+    				end
+    			else
+    				warn("IDE Sync app not loaded.")
+    			end
+    		end})
+    
+    		context:Register("SAVE_BYTECODE",{Name = "Save Script Bytecode", IconMap = Explorer.MiscIcons, Icon = "Save", DisabledIcon = "Empty", OnClick = function()
+    			for _, v in next, selection.List do
+    				if v.Obj:IsA("LuaSourceContainer") and env.isViableDecompileScript(v.Obj) then
+    					local success, bytecode = pcall(env.getscriptbytecode, v.Obj)
+    					if success and type(bytecode) == "string" then
+    						local fileName = ("%s_%s_%i_Bytecode.txt"):format(env.parsefile(v.Obj.Name), v.Obj.ClassName, game.PlaceId)
+    						Lib.SaveAsPrompt(fileName, bytecode)
+    						task.wait(0.2)
+    					end
+    				end
+    			end
+    		end})
+    
+    		context:Register("VIEW_SCRIPT_RELATIONS",{Name = "Script Relations", IconMap = Explorer.MiscIcons, Icon = "SelectChildren", DisabledIcon = "Empty", OnClick = function()
+    			local scr = selection.List[1] and selection.List[1].Obj
+    			if scr and ensureTool(ScriptRelations) then ScriptRelations.ShowForScript(scr) end
+    		end})
+    
+    		context:Register("VIEW_DEPENDENCY_GRAPH",{Name = "Script Dependency Graph", IconMap = Explorer.MiscIcons, Icon = "ExploreData", DisabledIcon = "Empty", OnClick = function()
+    			local scr = selection.List[1] and selection.List[1].Obj
+    			if scr and ensureTool(DependencyGraph) then DependencyGraph.ShowForScript(scr) end
+    		end})
+    
+    		context:Register("DUMP_FUNCTIONS",{Name = "Dump Functions", IconMap = Explorer.MiscIcons, Icon = "SelectChildren", DisabledIcon = "Empty", OnClick = function()
+    			local scr = selection.List[1] and selection.List[1].Obj
+    			if scr then Notepad.DumpFunctions(scr) end
+    		end})
+    	end
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["InteractionMenu"] = function()
+    --!strict
+    --[[
+    	Interaction Menu Module
+    	Registers interaction actions: remote interception, prompt/click firing, animations and tweens.
+    ]]
+    local Main, Lib, Apps, Settings
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	return function(context, data)
+    		local selection = data.selection
+    		local Explorer = data.Explorer
+    		local env = data.env
+    		local ensureTool = data.ensureTool
+    		local remote_blocklist = data.remote_blocklist
+    		local plr = data.plr
+    		local RemoteUsageMap = data.RemoteUsageMap
+    
+    		local ClassFire = {
+    			RemoteEvent = "FireServer",
+    			RemoteFunction = "InvokeServer",
+    			UnreliableRemoteEvent = "FireServer",
+    
+    			BindableRemote = "Fire",
+    			BindableFunction = "Invoke",
+    		}
+    
+    		context:Register("BLOCK_REMOTE",{Name = "Block From Firing", IconMap = Explorer.MiscIcons, Icon = "Delete", DisabledIcon = "Empty", OnClick = function()
+    			local sList = selection.List
+    			for i, list in sList do
+    				local obj = list.Obj
+    				if not remote_blocklist[obj] then
+    					local functionToHook = ClassFire[obj.ClassName]
+    					remote_blocklist[obj] = true
+    					local old; old = env.hookmetamethod((oldgame or game), "__namecall", function(self, ...)
+    						if remote_blocklist[obj] and self == obj and getnamecallmethod() == functionToHook then
+    							return nil
+    						end
+    						return old(self,...)
+    					end)
+    					if Settings.RemoteBlockWriteAttribute then
+    						obj:SetAttribute("IsBlocked", true)
+    					end
+    				end
+    			end
+    		end})
+    
+    		context:Register("UNBLOCK_REMOTE",{Name = "Unblock", IconMap = Explorer.MiscIcons, Icon = "Play", DisabledIcon = "Empty", OnClick = function()
+    			local sList = selection.List
+    			for i, list in sList do
+    				local obj = list.Obj
+    				if remote_blocklist[obj] then
+    					remote_blocklist[obj] = nil
+    					if Settings.RemoteBlockWriteAttribute then
+    						list.Obj:SetAttribute("IsBlocked", false)
+    					end
+    				end
+    			end
+    		end})
+    
+    		context:Register("VIEW_REMOTE_USAGE",{Name = "Remote Usage Map", IconMap = Explorer.MiscIcons, Icon = "ExploreData", DisabledIcon = "Empty", OnClick = function()
+    			local remote = selection.List[1] and selection.List[1].Obj
+    			if remote and ensureTool(RemoteUsageMap) then RemoteUsageMap.ShowForRemote(remote) end
+    		end})
+    
+    		context:Register("FUZZ_REMOTE",{Name = "Fuzz Remote", IconMap = Explorer.MiscIcons, Icon = "CallRemote", DisabledIcon = "Empty", OnClick = function()
+    			local remote = selection.List[1] and selection.List[1].Obj
+    			if remote and Apps.RemoteFuzzer then Apps.RemoteFuzzer.Generate(remote) end
+    		end})
+    
+    		context:Register("FIRE_CLICKDETECTOR",{Name = "Fire ClickDetector", OnClick = function()
+    			local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    			if not hrp then return end
+    			for _, v in ipairs(selection.List) do if v.Obj and v.Obj:IsA("ClickDetector") then fireclickdetector(v.Obj) end end
+    		end})
+    
+    		context:Register("FIRE_PROXIMITYPROMPT",{Name = "Fire ProximityPrompt", OnClick = function()
+    			local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    			if not hrp then return end
+    			for _, v in ipairs(selection.List) do if v.Obj and v.Obj:IsA("ProximityPrompt") then fireproximityprompt(v.Obj) end end
+    		end})
+    
+    		local OldAnimation = { Current = nil }
+    		context:Register("PLAY_TWEEN",{Name = "Play Tween", IconMap = Explorer.MiscIcons, Icon = "Play", OnClick = function()
+    			local sList = selection.List
+    
+    			for i = 1, #sList do
+    				local node = sList[i]
+    				local Obj = node.Obj
+    
+    				if Obj:IsA("Tween") then Obj:Play() end
+    			end
+    		end})
+    
+    		context:Register("LOAD_ANIMATION",{Name = "Load Animation", IconMap = Explorer.MiscIcons, Icon = "Play", OnClick = function()
+    			local sList = selection.List
+    
+    			local Humanoid = plr.Character and plr.Character:FindFirstChild("Humanoid")
+    			if not Humanoid then return end
+    
+    			for i = 1, #sList do
+    				local node = sList[i]
+    				local Obj = node.Obj
+    
+    				if Obj:IsA("Animation") then
+    					if OldAnimation.Current then OldAnimation.Current:Stop() end
+    					OldAnimation.Current = Humanoid:LoadAnimation(Obj)
+    					OldAnimation.Current:Play()
+    					break
+    				end
+    			end
+    		end})
+    
+    		context:Register("STOP_ANIMATION",{Name = "Stop Animation", IconMap = Explorer.MiscIcons, Icon = "Pause", OnClick = function()
+    			local sList = selection.List
+    
+    			local Humanoid = plr.Character and plr.Character:FindFirstChild("Humanoid")
+    			if not Humanoid then return end
+    
+    			for i = 1, #sList do
+    				local node = sList[i]
+    				local Obj = node.Obj
+    
+    				if Obj:IsA("Animation") then
+    					if OldAnimation.Current then OldAnimation.Current:Stop() end
+    					Humanoid:LoadAnimation(Obj):Stop()
+    					break
+    				end
+    			end
+    		end})
+    	end
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["PlayerMenu"] = function()
+    --!strict
+    --[[
+    	Player Menu Module
+    	Registers player selection, camera target focusing, and local player utility options.
+    ]]
+    local Main, Lib, Apps, Settings
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	return function(context, data)
+    		local selection = data.selection
+    		local Explorer = data.Explorer
+    		local nodes = data.nodes
+    		local plr = data.plr
+    		local service = data.service
+    		local isa = game.IsA
+    
+    		context:Register("SELECT_CHARACTER",{Name = "Select Character", IconMap = Explorer.LegacyClassIcons, Icon = 9, OnClick = function()
+    			local newSelection = {}
+    			local count = 1
+    			local sList = selection.List
+    
+    			for i = 1,#sList do
+    				local node = sList[i]
+    				if isa(node.Obj,"Player") and nodes[node.Obj.Character] then
+    					newSelection[count] = nodes[node.Obj.Character]
+    					count = count + 1
+    				end
+    			end
+    
+    			selection:SetTable(newSelection)
+    			if #newSelection > 0 then
+    				Explorer.ViewNode(newSelection[1])
+    			else
+    				Explorer.Refresh()
+    			end
+    		end})
+    
+    		context:Register("VIEW_PLAYER",{Name = "View Player", IconMap = Explorer.LegacyClassIcons, Icon = 5, OnClick = function()
+    			local sList = selection.List
+    
+    			for i = 1,#sList do
+    				local node = sList[i]
+    				local Obj = node.Obj
+    				if Obj:IsA("Player") and Obj.Character then
+    					workspace.CurrentCamera.CameraSubject = Obj.Character
+    					break
+    				end
+    			end
+    		end})
+    
+    		context:Register("SELECT_LOCAL_PLAYER",{Name = "Select Local Player", IconMap = Explorer.LegacyClassIcons, Icon = 9, OnClick = function()
+    			pcall(function() if nodes[plr] then selection:Set(nodes[plr]) Explorer.ViewNode(nodes[plr]) end end)
+    		end})
+    
+    		context:Register("SELECT_ALL_CHARACTERS",{Name = "Select All Characters", IconMap = Explorer.LegacyClassIcons, Icon = 2, OnClick = function()
+    			local newSelection = {}
+    
+    			for i,v in next, service.Players:GetPlayers() do
+    				if v.Character and nodes[v.Character] then
+    					if i == 1 then Explorer.MakeNodeVisible(v.Character) end
+    					table.insert(newSelection, nodes[v.Character])
+    				end
+    			end
+    
+    			selection:SetTable(newSelection)
+    			if #newSelection > 0 then
+    				Explorer.ViewNode(newSelection[1])
+    			else
+    				Explorer.Refresh()
+    			end
+    		end})
+    	end
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["NilInstanceMenu"] = function()
+    --!strict
+    --[[
+    	Nil Instance Menu Module
+    	Registers options to scan and manage unparented (nil) instances.
+    ]]
+    local Main, Lib, Apps, Settings
+    local function initDeps(data)
+    	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	return function(context, data)
+    		local Explorer = data.Explorer
+    
+    		context:Register("REFRESH_NIL",{Name = "Refresh Nil Instances", OnClick = function()
+    			Explorer.RefreshNilInstances()
+    		end})
+    
+    		context:Register("HIDE_NIL",{Name = "Hide Nil Instances", OnClick = function()
+    			Explorer.HideNilInstances()
+    		end})
+    	end
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
 end,
 ["Properties"] = function()
     --[[
@@ -14754,6 +15111,460 @@ end,
     else
     	return {InitDeps = initDeps, InitAfterMain = initAfterMain, Main = main}
     end
+end,
+["Clipboard"] = function()
+    --[[
+    	Clipboard Core Module
+    	Handles copying, cutting, and pasting of instances.
+    ]]
+    
+    -- Common Locals
+    local Main, Lib, Apps, Settings
+    local API, RMD, env, service, plr, create, createSimple
+    
+    local function initDeps(data)
+    	Main = data.Main
+    	Lib = data.Lib
+    	Apps = data.Apps
+    	Settings = data.Settings
+    
+    	API = data.API
+    	RMD = data.RMD
+    	env = data.env
+    	service = data.service
+    	plr = data.plr
+    	create = data.create
+    	createSimple = data.createSimple
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	local Clipboard = {
+    		List = {}
+    	}
+    
+    	Clipboard.Copy = function(selectionList)
+    		local clone = game.Clone
+    		local newClipboard = {}
+    		local count = 1
+    		for i = 1, #selectionList do
+    			local node = selectionList[i]
+    			if node and node.Obj then
+    				local inst = node.Obj
+    				local s, cloned = pcall(clone, inst)
+    				if s and cloned then
+    					newClipboard[count] = cloned
+    					count = count + 1
+    				end
+    			end
+    		end
+    		table.clear(Clipboard.List)
+    		for _, v in ipairs(newClipboard) do
+    			table.insert(Clipboard.List, v)
+    		end
+    	end
+    
+    	Clipboard.Cut = function(selectionList, selection)
+    		local destroy, clone = game.Destroy, game.Clone
+    		local newClipboard = {}
+    		local count = 1
+    		for i = 1, #selectionList do
+    			local node = selectionList[i]
+    			if node and node.Obj then
+    				local inst = node.Obj
+    				local s, cloned = pcall(clone, inst)
+    				if s and cloned then
+    					newClipboard[count] = cloned
+    					count = count + 1
+    				end
+    				pcall(destroy, inst)
+    			end
+    		end
+    		table.clear(Clipboard.List)
+    		for _, v in ipairs(newClipboard) do
+    			table.insert(Clipboard.List, v)
+    		end
+    		if selection and selection.Clear then
+    			selection:Clear()
+    		end
+    	end
+    
+    	Clipboard.Paste = function(selectionList, nodes, selection, ViewNode, MakeNodeVisible)
+    		if #Clipboard.List == 0 then return end
+    		local newSelection = {}
+    		local count = 1
+    		for i = 1, #selectionList do
+    			local node = selectionList[i]
+    			local inst = node.Obj
+    			if MakeNodeVisible then
+    				MakeNodeVisible(node, true)
+    			end
+    			for c = 1, #Clipboard.List do
+    				local cloned = Clipboard.List[c]:Clone()
+    				if cloned then
+    					cloned.Parent = inst
+    					local clonedNode = nodes[cloned]
+    					if clonedNode then
+    						newSelection[count] = clonedNode
+    						count = count + 1
+    					end
+    				end
+    			end
+    		end
+    		if selection and selection.SetTable then
+    			selection:SetTable(newSelection)
+    		end
+    		if #newSelection > 0 and ViewNode then
+    			ViewNode(newSelection[1])
+    		end
+    	end
+    
+    	Clipboard.HasItems = function()
+    		return #Clipboard.List > 0
+    	end
+    
+    	return Clipboard
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["Duplicate"] = function()
+    --[[
+    	Duplicate Core Module
+    	Handles duplicating selected instances in the Explorer.
+    ]]
+    
+    -- Common Locals
+    local Main, Lib, Apps, Settings
+    local API, RMD, env, service, plr, create, createSimple
+    
+    local function initDeps(data)
+    	Main = data.Main
+    	Lib = data.Lib
+    	Apps = data.Apps
+    	Settings = data.Settings
+    
+    	API = data.API
+    	RMD = data.RMD
+    	env = data.env
+    	service = data.service
+    	plr = data.plr
+    	create = data.create
+    	createSimple = data.createSimple
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	local Duplicate = {}
+    
+    	Duplicate.Execute = function(selectionList, nodes, selection, ViewNode, MakeNodeVisible)
+    		local clone = game.Clone
+    		local newSelection = {}
+    		local count = 1
+    		for i = 1, #selectionList do
+    			local node = selectionList[i]
+    			local inst = node.Obj
+    			local instPar = node.Parent and node.Parent.Obj
+    			if MakeNodeVisible then
+    				MakeNodeVisible(node)
+    			end
+    			local s, cloned = pcall(clone, inst)
+    			if s and cloned then
+    				cloned.Parent = instPar
+    				local clonedNode = nodes[cloned]
+    				if clonedNode then
+    					newSelection[count] = clonedNode
+    					count = count + 1
+    				end
+    			end
+    		end
+    
+    		if selection and selection.SetTable then
+    			selection:SetTable(newSelection)
+    		end
+    		if #newSelection > 0 and ViewNode then
+    			ViewNode(newSelection[1])
+    		end
+    	end
+    
+    	return Duplicate
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["Deletion"] = function()
+    --[[
+    	Deletion Core Module
+    	Handles deleting instances and clearing instance children.
+    ]]
+    
+    -- Common Locals
+    local Main, Lib, Apps, Settings
+    local API, RMD, env, service, plr, create, createSimple
+    
+    local function initDeps(data)
+    	Main = data.Main
+    	Lib = data.Lib
+    	Apps = data.Apps
+    	Settings = data.Settings
+    
+    	API = data.API
+    	RMD = data.RMD
+    	env = data.env
+    	service = data.service
+    	plr = data.plr
+    	create = data.create
+    	createSimple = data.createSimple
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	local Deletion = {}
+    
+    	Deletion.Delete = function(selectionList, selection)
+    		local destroy = game.Destroy
+    		for i = 1, #selectionList do
+    			local node = selectionList[i]
+    			if node and node.Obj then
+    				pcall(destroy, node.Obj)
+    			end
+    		end
+    		if selection and selection.Clear then
+    			selection:Clear()
+    		end
+    	end
+    
+    	Deletion.DeleteChildren = function(selectionList)
+    		for i = 1, #selectionList do
+    			local node = selectionList[i]
+    			if node and node.Obj then
+    				pcall(node.Obj.ClearAllChildren, node.Obj)
+    			end
+    		end
+    	end
+    
+    	return Deletion
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["PropertyCopier"] = function()
+    --[[
+    	Property Copier Core Module
+    	Handles copying of part and mesh properties to clipboard and pasting them in-game.
+    ]]
+    
+    -- Common Locals
+    local Main, Lib, Apps, Settings
+    local API, RMD, env, service, plr, create, createSimple
+    
+    local function initDeps(data)
+    	Main = data.Main
+    	Lib = data.Lib
+    	Apps = data.Apps
+    	Settings = data.Settings
+    
+    	API = data.API
+    	RMD = data.RMD
+    	env = data.env
+    	service = data.service
+    	plr = data.plr
+    	create = data.create
+    	createSimple = data.createSimple
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	local PropertyCopier = {}
+    	local copiedCache = nil
+    
+    	PropertyCopier.Copy = function(instance)
+    		if not instance then return end
+    		local data = {
+    			ClassName = instance.ClassName,
+    			Properties = {}
+    		}
+    		
+    		local function addProp(name, value)
+    			data.Properties[name] = value
+    		end
+    
+    		if instance:IsA("BasePart") then
+    			addProp("Material", instance.Material)
+    			pcall(function() addProp("MaterialVariant", instance.MaterialVariant) end)
+    			addProp("Color", instance.Color)
+    			addProp("Transparency", instance.Transparency)
+    			addProp("Reflectance", instance.Reflectance)
+    			addProp("Size", instance.Size)
+    			addProp("CanCollide", instance.CanCollide)
+    			addProp("Anchored", instance.Anchored)
+    			addProp("CastShadow", instance.CastShadow)
+    		end
+    
+    		-- Special handling for MeshPart / SpecialMesh
+    		if instance:IsA("MeshPart") then
+    			pcall(function() addProp("MeshId", instance.MeshId) end)
+    			pcall(function() addProp("TextureID", instance.TextureID) end)
+    		end
+    
+    		local specialMesh = instance:FindFirstChildOfClass("SpecialMesh")
+    		if specialMesh then
+    			data.SpecialMesh = {
+    				MeshId = specialMesh.MeshId,
+    				TextureId = specialMesh.TextureId,
+    				Scale = specialMesh.Scale,
+    				Offset = specialMesh.Offset,
+    				MeshType = specialMesh.MeshType
+    			}
+    		end
+    
+    		copiedCache = data
+    
+    		-- Convert to readable Luau table string and copy to system clipboard
+    		local lines = {"{"}
+    		table.insert(lines, "\tClassName = \"" .. data.ClassName .. "\",")
+    		table.insert(lines, "\tProperties = {")
+    		for k, v in pairs(data.Properties) do
+    			local valStr = tostring(v)
+    			if typeof(v) == "EnumItem" then
+    				valStr = tostring(v.Enum) .. "." .. v.Name
+    			elseif typeof(v) == "Color3" then
+    				valStr = "Color3.fromRGB(" .. math.round(v.R * 255) .. ", " .. math.round(v.G * 255) .. ", " .. math.round(v.B * 255) .. ")"
+    			elseif typeof(v) == "Vector3" then
+    				valStr = "Vector3.new(" .. v.X .. ", " .. v.Y .. ", " .. v.Z .. ")"
+    			elseif type(v) == "string" then
+    				valStr = "\"" .. v .. "\""
+    			end
+    			table.insert(lines, "\t\t" .. k .. " = " .. valStr .. ",")
+    		end
+    		table.insert(lines, "\t},")
+    		
+    		local specMesh = data.SpecialMesh
+    		if specMesh then
+    			table.insert(lines, "\tSpecialMesh = {")
+    			for k, v in pairs(specMesh) do
+    				local valStr = tostring(v)
+    				if typeof(v) == "EnumItem" then
+    					valStr = tostring(v.Enum) .. "." .. v.Name
+    				elseif typeof(v) == "Vector3" then
+    					valStr = "Vector3.new(" .. v.X .. ", " .. v.Y .. ", " .. v.Z .. ")"
+    				elseif type(v) == "string" then
+    					valStr = "\"" .. v .. "\""
+    				end
+    				table.insert(lines, "\t\t" .. k .. " = " .. valStr .. ",")
+    			end
+    			table.insert(lines, "\t}")
+    		end
+    		table.insert(lines, "}")
+    		local resultString = table.concat(lines, "\n")
+    
+    		if env and env.setclipboard then
+    			pcall(env.setclipboard, resultString)
+    		end
+    	end
+    
+    	PropertyCopier.Paste = function(targetInstance)
+    		if not targetInstance or not copiedCache then return end
+    		
+    		for k, v in pairs(copiedCache.Properties) do
+    			pcall(function()
+    				targetInstance[k] = v
+    			end)
+    		end
+    
+    		local specMesh = copiedCache.SpecialMesh
+    		if specMesh then
+    			local specialMesh = targetInstance:FindFirstChildOfClass("SpecialMesh")
+    			if not specialMesh then
+    				specialMesh = Instance.new("SpecialMesh")
+    				specialMesh.Parent = targetInstance
+    			end
+    			for k, v in pairs(specMesh) do
+    				pcall(function()
+    					specialMesh[k] = v
+    				end)
+    			end
+    		end
+    	end
+    
+    	PropertyCopier.HasCache = function()
+    		return copiedCache ~= nil
+    	end
+    
+    	return PropertyCopier
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
+end,
+["Rename"] = function()
+    --[[
+    	Rename Core Module
+    	Handles rename triggering for instances.
+    ]]
+    
+    -- Common Locals
+    local Main, Lib, Apps, Settings
+    local API, RMD, env, service, plr, create, createSimple
+    
+    local function initDeps(data)
+    	Main = data.Main
+    	Lib = data.Lib
+    	Apps = data.Apps
+    	Settings = data.Settings
+    
+    	API = data.API
+    	RMD = data.RMD
+    	env = data.env
+    	service = data.service
+    	plr = data.plr
+    	create = data.create
+    	createSimple = data.createSimple
+    end
+    
+    local function initAfterMain()
+    end
+    
+    local function main()
+    	local Rename = {}
+    
+    	Rename.Execute = function(selectionList, SetRenamingNode)
+    		if selectionList[1] and SetRenamingNode then
+    			SetRenamingNode(selectionList[1])
+    		end
+    	end
+    
+    	return Rename
+    end
+    
+    return {
+    	InitDeps = initDeps,
+    	InitAfterMain = initAfterMain,
+    	Main = main
+    }
 end,
 ["ModelViewer"] = function()
     --[[
@@ -24548,7 +25359,7 @@ end,
 local isFsSupported = readfile and writefile and isfile and isfolder and listfiles and delfile and delfolder
 
 -- Main vars
-local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
+local Main, Explorer, Properties, Notepad, Console, SaveInstance, ModelViewer, SettingsWindow, CodeSearch, ScriptRelations, RemoteUsageMap, ObjectLinks, ImageViewer, SoundViewer, AnimationViewer, ClientIndex, ActivityMap, DependencyGraph, SmartSearch, RuntimeInspector, ClientIntelligence, InspectorHub, TaskRouter, ControlCenter, Theme, SmartDecompiler, SecurityAuditor, RemoteFuzzer, PropertyTracker, InstanceSerializer, ThreadManager, IDESync, Clipboard, Duplicate, Deletion, PropertyCopier, Rename--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
 local API, RMD
 
 -- Default Settings
@@ -24565,7 +25376,9 @@ DefaultSettings = (function()
 			AutoUpdateMode = 0, -- 0 Default, 1 no tree update, 2 no descendant events, 3 frozen
 			PartSelectionBox = true,
 			GuiSelectionBox = true,
-			CopyPathUseGetChildren = true
+			CopyPathUseGetChildren = true,
+			ViewportContextMenuEnabled = true,
+			ViewportContextMenuTrigger = "Middle Click"
 		},
 		Properties = {
 			_Recurse = true,
@@ -25006,7 +25819,7 @@ Main = (function()
 		end
 	end
 
-	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","Properties","SaveInstance","ModelViewer","ImageViewer","SoundViewer","AnimationViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync"}
+	Main.ModuleList = {"Theme","Lib","Console","SettingsWindow","ControlCenter","TaskRouter","ThreadManager","Explorer","EditMenu","NavigationMenu","ObjectMenu","ScriptMenu","InteractionMenu","PlayerMenu","NilInstanceMenu","Properties","SaveInstance","ModelViewer","ImageViewer","SoundViewer","AnimationViewer","ObjectLinks","InstanceSerializer","SmartDecompiler","Notepad","ClientIndex","CodeSearch","SmartSearch","DependencyGraph","ScriptRelations","SecurityAuditor","RuntimeInspector","RemoteUsageMap","ActivityMap","PropertyTracker","RemoteFuzzer","ClientIntelligence","InspectorHub","IDESync","Clipboard","Duplicate","Deletion","PropertyCopier","Rename"}
 	Main.ModulePathMap = {
 		Theme = "Core/Theme",
 		Lib = "Core/Lib",
@@ -25016,12 +25829,19 @@ Main = (function()
 		TaskRouter = "Core/TaskRouter",
 		ThreadManager = "Core/ThreadManager",
 		Explorer = "Explorer/Explorer",
+		EditMenu = "Explorer/ContextMenu/EditMenu",
+		NavigationMenu = "Explorer/ContextMenu/NavigationMenu",
+		ObjectMenu = "Explorer/ContextMenu/ObjectMenu",
+		ScriptMenu = "Explorer/ContextMenu/ScriptMenu",
+		InteractionMenu = "Explorer/ContextMenu/InteractionMenu",
+		PlayerMenu = "Explorer/ContextMenu/PlayerMenu",
+		NilInstanceMenu = "Explorer/ContextMenu/NilInstanceMenu",
 		Properties = "Explorer/Properties",
 		SaveInstance = "Explorer/SaveInstance",
-		ModelViewer = "Roblox Assets Viewer/ModelViewer",
-		ImageViewer = "Roblox Assets Viewer/ImageViewer",
-		SoundViewer = "Roblox Assets Viewer/SoundViewer",
-		AnimationViewer = "Roblox Assets Viewer/AnimationViewer",
+		ModelViewer = "Explorer/ContextMenu/Roblox Assets Viewer/ModelViewer",
+		ImageViewer = "Explorer/ContextMenu/Roblox Assets Viewer/ImageViewer",
+		SoundViewer = "Explorer/ContextMenu/Roblox Assets Viewer/SoundViewer",
+		AnimationViewer = "Explorer/ContextMenu/Roblox Assets Viewer/AnimationViewer",
 		ObjectLinks = "Explorer/ObjectLinks",
 		InstanceSerializer = "Explorer/InstanceSerializer",
 		SmartDecompiler = "Search/SmartDecompiler",
@@ -25040,6 +25860,11 @@ Main = (function()
 		ClientIntelligence = "Runtime/ClientIntelligence",
 		InspectorHub = "Runtime/InspectorHub",
 		IDESync = "Tools/IDESync",
+		Clipboard = "Explorer/Clipboard",
+		Duplicate = "Explorer/Duplicate",
+		Deletion = "Explorer/Deletion",
+		PropertyCopier = "Explorer/PropertyCopier",
+		Rename = "Explorer/Rename",
 	}
 	Main.Elevated = false
 	Main.AllowDraggableOnMobile = true
@@ -25467,6 +26292,11 @@ Main = (function()
 		InstanceSerializer = Apps.InstanceSerializer
 		ThreadManager = Apps.ThreadManager
 		IDESync = Apps.IDESync
+		Clipboard = Apps.Clipboard
+		Duplicate = Apps.Duplicate
+		Deletion = Apps.Deletion
+		PropertyCopier = Apps.PropertyCopier
+		Rename = Apps.Rename
 
 
 		--SecretServicePanel = Apps.SecretServicePanel
@@ -25502,7 +26332,12 @@ Main = (function()
 			PropertyTracker = PropertyTracker,
 			InstanceSerializer = InstanceSerializer,
 			ThreadManager = ThreadManager,
-			IDESync = IDESync
+			IDESync = IDESync,
+			Clipboard = Clipboard,
+			Duplicate = Duplicate,
+			Deletion = Deletion,
+			PropertyCopier = PropertyCopier,
+			Rename = Rename
 		}
 
 		Main.AppControls.Lib.InitAfterMain(appTable)
