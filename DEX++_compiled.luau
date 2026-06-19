@@ -19785,6 +19785,7 @@ end,
     				-- Node Header Name
     				local nameLbl = Instance.new("TextLabel", nodeFrame)
     				nameLbl.BackgroundTransparency = 1
+    				nameLbl.ZIndex = 11
     				nameLbl.Position = UDim2.new(0, 8, 0, 4)
     				nameLbl.Size = UDim2.new(1, -16, 0, 18)
     				nameLbl.Font = Enum.Font.SourceSansBold
@@ -19797,6 +19798,7 @@ end,
     				-- Role Badge
     				local badgeLbl = Instance.new("TextLabel", nodeFrame)
     				badgeLbl.BackgroundTransparency = 1
+    				badgeLbl.ZIndex = 11
     				badgeLbl.Position = UDim2.new(0, 8, 0, 22)
     				badgeLbl.Size = UDim2.new(1, -16, 0, 16)
     				badgeLbl.Font = Enum.Font.SourceSans
