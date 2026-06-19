@@ -19425,8 +19425,11 @@ end,
     	-- Graph State
     	local nodesData = {}      -- Key -> Node data
     	local edgesData = {}      -- List of { fromKey, toKey }
+    	local edgesByNode = {}    -- Key -> incident edges
     	local nodeFrames = {}     -- Key -> Frame UI
     	local edgeLines = {}      -- List of Line UI Frames
+    	local selectedNodeKey = nil
+    	local hoveredNodeKey = nil
     
     	local function getPath(obj)
     		if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(obj) end
@@ -19475,8 +19478,18 @@ end,
     		return remotes
     	end
     
+    	local function requireBlockMentionsName(block, name)
+    		local loweredName = tostring(name or ""):lower()
+    		if #loweredName < 3 then return false end
+    		local loweredBlock = tostring(block or ""):lower()
+    		if loweredName:match("^[%w_]+$") then
+    			return loweredBlock:find("%f[%w_]" .. loweredName .. "%f[^%w_]") ~= nil
+    		end
+    		return loweredBlock:find(loweredName, 1, true) ~= nil
+    	end
+    
     	-- Simple Rotated Line Drawer for Canvas
-    	local function drawLine(p1, p2)
+    	local function drawLine(p1, p2, outgoing)
     		local dx = p2.X - p1.X
     		local dy = p2.Y - p1.Y
     		local length = math.sqrt(dx * dx + dy * dy)
@@ -19485,12 +19498,13 @@ end,
     
     		local line = Instance.new("Frame")
     		line.BorderSizePixel = 0
-    		line.BackgroundColor3 = Settings.Theme.Outline1
-    		line.Size = UDim2.new(0, length, 0, 1)
+    		line.BackgroundColor3 = outgoing and Settings.Theme.Highlight or Settings.Theme.Outline2
+    		line.BackgroundTransparency = outgoing and 0.18 or 0.35
+    		line.Size = UDim2.new(0, length, 0, 2)
     		line.Position = UDim2.new(0, p1.X, 0, p1.Y)
     		line.Rotation = angle
     		line.AnchorPoint = Vector2.new(0, 0.5)
-    		line.ZIndex = 5
+    		line.ZIndex = 2
     		line.Parent = listFrame
     		return line
     	end
@@ -19501,19 +19515,25 @@ end,
     		end
     		table.clear(edgeLines)
     
-    		for _, edge in ipairs(edgesData) do
+    		local focusKey = hoveredNodeKey or selectedNodeKey
+    		if not focusKey then return end
+    
+    		for _, edge in ipairs(edgesByNode[focusKey] or {}) do
     			local fFrame = nodeFrames[edge.fromKey]
     			local tFrame = nodeFrames[edge.toKey]
     			if fFrame and tFrame then
+    				local fromCenterX = fFrame.Position.X.Offset + fFrame.Size.X.Offset / 2
+    				local toCenterX = tFrame.Position.X.Offset + tFrame.Size.X.Offset / 2
+    				local direction = toCenterX >= fromCenterX and 1 or -1
     				local p1 = Vector2.new(
-    					fFrame.Position.X.Offset + fFrame.Size.X.Offset / 2,
+    					fromCenterX + direction * fFrame.Size.X.Offset / 2,
     					fFrame.Position.Y.Offset + fFrame.Size.Y.Offset / 2
     				)
     				local p2 = Vector2.new(
-    					tFrame.Position.X.Offset + tFrame.Size.X.Offset / 2,
+    					toCenterX - direction * tFrame.Size.X.Offset / 2,
     					tFrame.Position.Y.Offset + tFrame.Size.Y.Offset / 2
     				)
-    				local line = drawLine(p1, p2)
+    				local line = drawLine(p1, p2, edge.fromKey == focusKey)
     				if line then
     					table.insert(edgeLines, line)
     				end
@@ -19647,6 +19667,8 @@ end,
     		table.clear(edgeLines)
     		if contextMenu then contextMenu:Destroy() end
     		if sidePanel then sidePanel.Visible = false end
+    		selectedNodeKey = nil
+    		hoveredNodeKey = nil
     	end
     
     	local function scan()
@@ -19655,6 +19677,7 @@ end,
     		clearCanvas()
     		table.clear(nodesData)
     		table.clear(edgesData)
+    		table.clear(edgesByNode)
     
     		window:SetTitle("Script Dependency Graph")
     		if not env.DecompileCache or not env.DecompileCache.GetEntries or not env.isfile then
@@ -19668,7 +19691,6 @@ end,
     			local byKey, remotes = scriptByKey(), collectRemotes()
     			
     			local scanned = 0
-    			local requireLinks = 0
     			local remoteHits = 0
     
     			-- Pass 1: Parse all scripts and build nodes & adjacency lists
@@ -19687,15 +19709,15 @@ end,
     							inDegree[key] = inDegree[key] or 0
     
     							-- Find requires
+    							local relationSeen = {}
     							for block in source:gmatch("require%s*%b()") do
     								-- Match other script names in require
     								for otherKey, otherEntry in pairs(entries) do
     									if otherKey ~= key and otherEntry.Name then
-    										local otherName = otherEntry.Name:lower()
-    										if #otherName >= 3 and block:lower():find(otherName, 1, true) then
+    										if not relationSeen[otherKey] and requireBlockMentionsName(block, otherEntry.Name) then
+    											relationSeen[otherKey] = true
     											table.insert(tempRelations[key], otherKey)
     											inDegree[otherKey] = (inDegree[otherKey] or 0) + 1
-    											requireLinks += 1
     										end
     									end
     								end
@@ -19731,6 +19753,7 @@ end,
     			end
     
     			-- Pass 2: Apply classification & save edges
+    			local edgeSet = {}
     			for key, node in pairs(nodesData) do
     				node.InDegree = inDegree[key] or 0
     				
@@ -19748,7 +19771,16 @@ end,
     				if deps then
     					for _, depKey in ipairs(deps) do
     						if nodesData[depKey] then
-    							table.insert(edgesData, { fromKey = key, toKey = depKey })
+    							local edgeId = tostring(key) .. ">" .. tostring(depKey)
+    							if not edgeSet[edgeId] then
+    								edgeSet[edgeId] = true
+    								local edge = { fromKey = key, toKey = depKey }
+    								table.insert(edgesData, edge)
+    								edgesByNode[key] = edgesByNode[key] or {}
+    								edgesByNode[depKey] = edgesByNode[depKey] or {}
+    								table.insert(edgesByNode[key], edge)
+    								table.insert(edgesByNode[depKey], edge)
+    							end
     						end
     					end
     				end
@@ -19816,12 +19848,25 @@ end,
     
     				nodeFrames[key] = nodeFrame
     
+    				nodeFrame.MouseEnter:Connect(function()
+    					hoveredNodeKey = key
+    					updateLines()
+    				end)
+    				nodeFrame.MouseLeave:Connect(function()
+    					if hoveredNodeKey == key then
+    						hoveredNodeKey = nil
+    						updateLines()
+    					end
+    				end)
+    
     				-- Interactivity: Drag & Drop
     				local dragging = false
     				local dragStart, startPos, dragInput
     
     				nodeFrame.InputBegan:Connect(function(input)
     					if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    						selectedNodeKey = key
+    						updateLines()
     						dragging = true
     						dragStart = input.Position
     						startPos = nodeFrame.Position
@@ -19834,6 +19879,8 @@ end,
     							end
     						end)
     					elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+    						selectedNodeKey = key
+    						updateLines()
     						showContextMenu(Vector2.new(nodeFrame.Position.X.Offset + 10, nodeFrame.Position.Y.Offset + 10), node)
     					end
     				end)
@@ -19873,7 +19920,7 @@ end,
     			listFrame.CanvasSize = UDim2.new(0, maxX, 0, maxY)
     
     			updateLines()
-    			statusLabel.Text = ("Graph built: %d nodes, %d links, %d remotes. Double click node to inspect."):format(scanned, requireLinks, remoteHits)
+    			statusLabel.Text = ("Graph built: %d nodes, %d unique links, %d remotes. Select or hover a node to show links."):format(scanned, #edgesData, remoteHits)
     		end)
     	end
     
@@ -19948,6 +19995,8 @@ end,
     			if ok and key then
     				local frame = nodeFrames[key]
     				if frame then
+    					selectedNodeKey = key
+    					updateLines()
     					-- Highlight node border
     					frame.BorderColor3 = Color3.fromRGB(255, 170, 0)
     					frame.BorderSizePixel = 2
