@@ -1,0 +1,10 @@
+[package]
+name = "rust_source_analyzer"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

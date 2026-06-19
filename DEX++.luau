@@ -146,9 +146,12 @@ DefaultSettings = (function()
 			ShinyDecompilerPort = 3000,
 			HelperServerPort = 8080,
 			UseLocalHelper = false,
+			PreferLocalHelperDecompiler = true,
+			FastCacheRead = true,
 			HelperLogChanges = false,
 			HelperLogRateLimit = 5,
 			HelperRequestTimeout = 2,
+			HelperDecompileTimeout = 15,
 			CodeSearchLowImpact = true,
 		},
 		AutoCheckUpdate = true,
@@ -555,7 +558,16 @@ Main = (function()
 	Main.UpdateScriptURL = nil
 	Main.UpdateCheckStarted = false
 	Main.LatestUpdateSource = nil
+	Main.StartedAt = os.time()
 	Main.ToolState = {}
+	Main.ToolStatePostQueued = false
+	Main.ToolStateLastPost = 0
+	Main.GameContext = {
+		PlaceId = tostring(game.PlaceId or ""),
+		GameId = tostring(game.GameId or ""),
+		JobId = tostring(game.JobId or ""),
+		Name = tostring(game.Name or "Roblox session"),
+	}
 
 	Main.DisplayOrders = {
 		SideWindow = 8,
@@ -573,7 +585,11 @@ Main = (function()
 			old[k] = v
 		end
 		old.UpdatedAt = os.clock()
+		old.UpdatedWallAt = os.time()
 		Main.ToolState[name] = old
+		if Main.ScheduleToolStatePost then
+			Main.ScheduleToolStatePost()
+		end
 	end
 
 	Main.GetToolStates = function()
@@ -1285,8 +1301,8 @@ Main = (function()
 					and Settings.Decompiler.UseLocalHelper == true
 			end
 
-			function helper.Request(path, method, body, contentType)
-				if not helperEnabled() then return nil, "local helper disabled" end
+			function helper.Request(path, method, body, contentType, timeoutSeconds, allowWhenDisabled)
+				if not helperEnabled() and not allowWhenDisabled then return nil, "local helper disabled" end
 				local now = os.clock()
 				if helper.DisabledUntil > now then
 					return nil, "local helper temporarily disabled"
@@ -1301,7 +1317,7 @@ Main = (function()
 						["Content-Type"] = contentType or "text/plain"
 					},
 					Body = body,
-					Timeout = Settings.Decompiler.HelperRequestTimeout or 2,
+					Timeout = timeoutSeconds or Settings.Decompiler.HelperRequestTimeout or 2,
 				})
 				if not ok or not result then
 					helper.FailCount += 1
@@ -1411,11 +1427,17 @@ Main = (function()
 			end
 
 			function helper.Decompile(bytecode)
-				local result = helper.Request("/decompile", "POST", bytecode, "application/octet-stream")
+				local timeout = Settings.Decompiler.HelperDecompileTimeout or 15
+				local result = helper.Request("/decompile", "POST", bytecode, "application/octet-stream", timeout)
 				if result and result.StatusCode == 200 and type(result.Body) == "string" then
 					return result.Body
 				end
 				return nil
+			end
+
+			function helper.PostToolState(json)
+				local result = helper.Request("/tool-state", "POST", tostring(json or "{}"), "application/json", 1, true)
+				return result and result.StatusCode == 200
 			end
 
 			function helper.Log(line)
@@ -1425,6 +1447,72 @@ Main = (function()
 
 			return helper
 		end)()
+
+		task.spawn(function()
+			local ok, info = pcall(function()
+				local marketplace = service.MarketplaceService or game:GetService("MarketplaceService")
+				return marketplace:GetProductInfo(game.PlaceId)
+			end)
+			if ok and type(info) == "table" then
+				local resolvedName = info.Name or info.AssetName
+				if type(resolvedName) == "string" and resolvedName ~= "" then
+					Main.GameContext.Name = resolvedName
+				end
+				Main.GameContext.Creator = info.Creator and info.Creator.Name or nil
+			end
+			if Main.ScheduleToolStatePost then
+				Main.ScheduleToolStatePost()
+			end
+		end)
+
+		Main.BuildHelperToolState = function()
+			local payload = {
+				ok = true,
+				updatedAt = os.time(),
+				version = Main.Version,
+				session = {
+					state = "connected",
+					startedAt = Main.StartedAt or os.time(),
+					executor = Main.Executor or "unknown",
+				},
+				game = Main.GameContext,
+				settings = {
+					useLocalHelper = Settings.Decompiler and Settings.Decompiler.UseLocalHelper == true,
+					lowImpact = Settings.Decompiler and Settings.Decompiler.CodeSearchLowImpact ~= false,
+					fastCacheRead = Settings.Decompiler and Settings.Decompiler.FastCacheRead == true,
+				},
+				tools = Main.ToolState or {},
+			}
+			local ok, encoded = pcall(service.HttpService.JSONEncode, service.HttpService, payload)
+			return ok and encoded or nil
+		end
+
+		Main.PushToolStateToHelper = function()
+			if not env.HelperServer or not env.HelperServer.PostToolState then return false end
+			local encoded = Main.BuildHelperToolState and Main.BuildHelperToolState()
+			if not encoded then return false end
+			return env.HelperServer.PostToolState(encoded)
+		end
+
+		Main.ScheduleToolStatePost = function()
+			if Main.ToolStatePostQueued then return end
+			Main.ToolStatePostQueued = true
+			local delayTime = math.max(0, 0.5 - (os.clock() - (Main.ToolStateLastPost or 0)))
+			task.delay(delayTime, function()
+				Main.ToolStatePostQueued = false
+				Main.ToolStateLastPost = os.clock()
+				pcall(Main.PushToolStateToHelper)
+			end)
+		end
+
+		Main.ReportToolState("DEX Session", {
+			State = "connected",
+			Load = "low",
+			Version = Main.Version,
+			PlaceId = tostring(game.PlaceId or ""),
+			GameId = tostring(game.GameId or ""),
+			JobId = tostring(game.JobId or ""),
+		})
 
 		env.isdecompile = function()
 			return typeof(decompile) == "function" or typeof(getscriptbytecode) == "function" or false
@@ -1664,11 +1752,24 @@ Main = (function()
 				local path = placeDir .. "/" .. tostring(entry.File or info.File)
 				return env.isfile(path)
 			end
+			cache.HasFreshFast = function(script_instance)
+				loadMetadata()
+				if not ensureCacheFolders() then return false end
+
+				local info = getInfo(script_instance, true)
+				if not info then return false end
+
+				local entry = metadata.Scripts[info.Key]
+				if not entry then return false end
+
+				local path = placeDir .. "/" .. tostring(entry.File or info.File)
+				return env.isfile(path)
+			end
 			cache.Read = function(script_instance)
 				loadMetadata()
 				if not ensureCacheFolders() then return nil, "Filesystem APIs are unavailable." end
 
-				local info = getInfo(script_instance)
+				local info = getInfo(script_instance, Settings.Decompiler and Settings.Decompiler.FastCacheRead == true)
 				if not info then return nil, "Script cache info is unavailable." end
 
 				local entry = metadata.Scripts[info.Key]
@@ -1713,6 +1814,22 @@ Main = (function()
 		env.DecompileCache = createDecompileCache()
 
 		local function decompileUncached(script_instance, ...)
+			local helperPreferred = Settings.Decompiler.UseLocalHelper == true
+				and Settings.Decompiler.PreferLocalHelperDecompiler ~= false
+				and env.HelperServer
+				and env.HelperServer.Decompile
+				and typeof(getscriptbytecode) == "function"
+
+			if helperPreferred then
+				local success, bytecode = pcall(env.getscriptbytecode, script_instance)
+				if success and type(bytecode) == "string" and bytecode ~= "" then
+					local decompiled = env.HelperServer.Decompile(bytecode)
+					if isCacheableSource(decompiled) then
+						return decompiled
+					end
+				end
+			end
+
 			local tryNative = not Settings.Decompiler.PreferDecompilerFallback
 
 			if nativeDecompile and tryNative then
@@ -1729,11 +1846,11 @@ Main = (function()
 			-- If native failed or was skipped, try fallbacks using bytecode
 			if typeof(getscriptbytecode) == "function" then
 				-- Helper Fallback (offload to external decompiler backend)
-				if Settings.Decompiler.UseLocalHelper == true and env.HelperServer and env.HelperServer.Decompile then
+				if not helperPreferred and Settings.Decompiler.UseLocalHelper == true and env.HelperServer and env.HelperServer.Decompile then
 					local success, bytecode = pcall(env.getscriptbytecode, script_instance)
 					if success and bytecode then
 						local decompiled = env.HelperServer.Decompile(bytecode)
-						if decompiled and not decompiled:match("Deserialization failed") and not decompiled:match("Error") then
+						if isCacheableSource(decompiled) then
 							return decompiled
 						end
 					end

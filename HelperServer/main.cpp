@@ -22,6 +22,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 
 // Link with ws2_32.lib
 #pragma comment(lib, "ws2_32.lib")
@@ -285,6 +286,9 @@ std::string analyze_source(const std::string& source) {
 
     std::stringstream json;
     json << "{";
+    json << "\"ok\":true,";
+    json << "\"worker\":\"cxx_core\",";
+    json << "\"language\":\"C++\",";
     json << "\"bytes\":" << source.size() << ",";
     json << "\"lines\":" << lines << ",";
     json << "\"functions\":" << count_token(source, "function") << ",";
@@ -975,9 +979,148 @@ size_t file_size_or_zero(const char* path) {
     return static_cast<size_t>(size);
 }
 
+bool file_exists(const std::string& path) {
+    DWORD attrs = GetFileAttributesA(path.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+std::string read_text_file(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return "";
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+std::string temp_file_path(const char* prefix) {
+    char temp_dir[MAX_PATH + 1];
+    char temp_file[MAX_PATH + 1];
+    DWORD len = GetTempPathA(MAX_PATH, temp_dir);
+    if (len == 0 || len > MAX_PATH) return "";
+    if (GetTempFileNameA(temp_dir, prefix, 0, temp_file) == 0) return "";
+    return std::string(temp_file);
+}
+
+std::string shell_quote(const std::string& path) {
+    std::string out = "\"";
+    for (char c : path) {
+        if (c == '"') out += "\\\"";
+        else out += c;
+    }
+    out += "\"";
+    return out;
+}
+
+bool run_command_with_input(const std::string& command, const std::string& input, std::string& output) {
+    std::string input_path = temp_file_path("dpp");
+    std::string output_path = temp_file_path("dpp");
+    if (input_path.empty() || output_path.empty()) return false;
+
+    {
+        std::ofstream input_file(input_path, std::ios::binary);
+        if (!input_file.is_open()) return false;
+        input_file.write(input.data(), static_cast<std::streamsize>(input.size()));
+    }
+
+    std::string full_command = command + " < " + shell_quote(input_path) + " > " + shell_quote(output_path);
+    if (!full_command.empty() && full_command.front() == '"') {
+        full_command = "\"" + full_command + "\"";
+    }
+    int code = std::system(full_command.c_str());
+    output = read_text_file(output_path);
+
+    std::remove(input_path.c_str());
+    std::remove(output_path.c_str());
+    return code == 0 && !output.empty();
+}
+
+std::string resolve_worker_path(const std::string& relative_path) {
+    std::string parent_path = "../HelperWorkers/" + relative_path;
+    if (file_exists(parent_path)) return parent_path;
+
+    std::string root_path = "HelperWorkers/" + relative_path;
+    if (file_exists(root_path)) return root_path;
+    return "";
+}
+
+bool run_python_analyzer(const std::string& source, std::string& output) {
+    std::string worker_path = resolve_worker_path("python/deep_source_analyzer.py");
+    if (worker_path.empty()) return false;
+
+    std::string command = "python " + shell_quote(worker_path);
+    if (run_command_with_input(command, source, output)) return true;
+
+    command = "py -3 " + shell_quote(worker_path);
+    return run_command_with_input(command, source, output);
+}
+
+bool run_rust_analyzer(const std::string& source, std::string& output) {
+    std::string worker_path = resolve_worker_path("rust_source_analyzer/target/release/rust_source_analyzer.exe");
+    if (worker_path.empty()) return false;
+    return run_command_with_input(shell_quote(worker_path), source, output);
+}
+
+std::string worker_status() {
+    bool python_worker = !resolve_worker_path("python/deep_source_analyzer.py").empty();
+    bool rust_source = !resolve_worker_path("rust_source_analyzer/Cargo.toml").empty();
+    bool rust_binary = !resolve_worker_path("rust_source_analyzer/target/release/rust_source_analyzer.exe").empty();
+
+    std::stringstream json;
+    json << "{\"ok\":true,\"autoThresholdBytes\":262144,\"roles\":[";
+    json << "{\"id\":\"cxx_core\",\"language\":\"C++\",\"ready\":true,\"priority\":3,\"role\":\"HTTP routing, cache, source index, dashboard, decompiler proxy, final fallback\"},";
+    json << "{\"id\":\"python_deep_analysis\",\"language\":\"Python\",\"ready\":" << (python_worker ? "true" : "false") << ",\"priority\":1,\"role\":\"Deep summaries, beginner-facing hints, recommendations, JSON shaping\"},";
+    json << "{\"id\":\"rust_source_analyzer\",\"language\":\"Rust\",\"ready\":" << (rust_binary ? "true" : "false") << ",\"sourceAvailable\":" << (rust_source ? "true" : "false") << ",\"priority\":2,\"role\":\"High-throughput lexical analysis for large source payloads\"}";
+    json << "],\"routes\":{\"fast\":\"Rust -> C++\",\"deep\":\"Python -> Rust -> C++\",\"auto\":\"Python below 256 KB; Rust at or above 256 KB; C++ fallback\"}}";
+    return json.str();
+}
+
+std::string analyze_source_fast(const std::string& source) {
+    std::string output;
+    if (run_rust_analyzer(source, output)) return output;
+    return analyze_source(source);
+}
+
+std::string analyze_source_deep(const std::string& source) {
+    std::string output;
+    if (run_python_analyzer(source, output)) return output;
+    if (run_rust_analyzer(source, output)) return output;
+    return analyze_source(source);
+}
+
+std::string analyze_source_auto(const std::string& source) {
+    constexpr size_t RUST_AUTO_THRESHOLD = 256 * 1024;
+    std::string output;
+
+    if (source.size() >= RUST_AUTO_THRESHOLD) {
+        if (run_rust_analyzer(source, output)) return output;
+        if (run_python_analyzer(source, output)) return output;
+    } else {
+        if (run_python_analyzer(source, output)) return output;
+        if (run_rust_analyzer(source, output)) return output;
+    }
+    return analyze_source(source);
+}
+
 std::string get_tool_state_response() {
     std::lock_guard<std::mutex> lock(g_tool_state_mutex);
     return g_tool_state_json;
+}
+
+std::string script_status_response() {
+    const char* local_path = "DEX++_compiled.luau";
+    const char* parent_path = "../DEX++_compiled.luau";
+    size_t size = file_size_or_zero(local_path);
+    std::string resolved = local_path;
+    if (size == 0) {
+        size = file_size_or_zero(parent_path);
+        resolved = parent_path;
+    }
+    std::stringstream json;
+    json << "{\"ok\":" << (size > 0 ? "true" : "false")
+         << ",\"file\":\"" << escape_json(resolved) << "\""
+         << ",\"bytes\":" << size
+         << ",\"url\":\"/script\"}";
+    return json.str();
 }
 
 std::string set_tool_state_response(const std::string& body) {
@@ -1013,28 +1156,48 @@ std::string helper_dashboard_html() {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DEX++ Helper</title>
 <style>
-:root{color-scheme:dark;--bg:#101215;--panel:#171a1f;--panel2:#1e232b;--line:#2a303a;--text:#eef2f7;--muted:#9ca3af;--accent:#5b6cff;--accent2:#31c48d;--warn:#f59e0b;--bad:#fb7185}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 Segoe UI,Roboto,Arial,sans-serif}
-header{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--line);background:#0d0f12;position:sticky;top:0;z-index:2}
+:root{color-scheme:dark;--bg:#0b0e12;--panel:#151a20;--panel2:#1d242c;--line:#2b3440;--text:#edf2f7;--muted:#92a0af;--accent:#41a890;--accent2:#4cc38f;--warn:#d6a849;--bad:#e85b66}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 20% 0%,#16201f 0,#0b0e12 36rem),var(--bg);color:var(--text);font:14px/1.45 Segoe UI,Roboto,Arial,sans-serif}
+header{height:58px;display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--line);background:rgba(9,12,16,.92);backdrop-filter:blur(12px);position:sticky;top:0;z-index:2}
 h1{font-size:17px;margin:0;font-weight:650}.pill{font:12px Consolas,monospace;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:3px 7px}
-main{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 52px)}
+main{display:grid;grid-template-columns:320px 1fr;min-height:calc(100vh - 58px)}
 aside{border-right:1px solid var(--line);background:#12151a;padding:14px;display:flex;flex-direction:column;gap:12px}
 section{padding:14px;display:grid;grid-template-rows:auto 1fr;gap:12px;min-width:0}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px}.title{font-weight:650;margin-bottom:8px}
+.card{background:linear-gradient(180deg,rgba(255,255,255,.025),rgba(255,255,255,0)),var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}.title{font-weight:650;margin-bottom:8px}
 .metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}.metric{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:9px}.metric b{display:block;font-size:18px}.metric span{color:var(--muted);font-size:12px}
 .stateRows{display:flex;flex-direction:column;gap:7px}.stateRow{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:8px}.stateRow b{display:block;font-size:13px}.stateRow span{display:block;color:var(--muted);font:12px Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.bar{height:6px;background:#0f1115;border:1px solid var(--line);border-radius:999px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;width:0;background:var(--accent2)}
-button,input,textarea{font:inherit}button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:4px;height:30px;padding:0 10px;cursor:pointer}button:hover{border-color:var(--accent);background:#252b35}button.primary{background:var(--accent);border-color:var(--accent);color:white}.row{display:flex;gap:8px;align-items:center}.row>*{min-width:0}
+button,input,textarea{font:inherit}button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:5px;height:30px;padding:0 10px;cursor:pointer;transition:border-color .18s,background .18s,transform .18s}button:hover{border-color:var(--accent);background:#25312f}button:active{transform:translateY(1px)}button.primary{background:var(--accent);border-color:var(--accent);color:white}.row{display:flex;gap:8px;align-items:center}.row>*{min-width:0}
 input,textarea{width:100%;background:#0f1115;border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;outline:none}input:focus,textarea:focus{border-color:var(--accent)}textarea{min-height:160px;resize:vertical;font-family:Consolas,monospace}
 .toolbar{display:grid;grid-template-columns:1fr auto auto;gap:8px}.tabs{display:flex;gap:6px}.tab{height:30px}.tab.active{border-color:var(--accent);color:white}
 .results{overflow:auto;border:1px solid var(--line);border-radius:6px;background:#0e1013}.hit{padding:10px 12px;border-bottom:1px solid var(--line)}.hit:last-child{border-bottom:0}.hit h3{font-size:14px;margin:0 0 4px}.hit .meta{color:var(--muted);font:12px Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hit pre{margin:8px 0 0;white-space:pre-wrap;color:#cbd5e1;font:12px Consolas,monospace}
+.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:12px}.statusGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px}.dot.ok{background:var(--accent2);box-shadow:0 0 12px rgba(76,195,143,.7)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}.codebox{font:12px Consolas,monospace;background:#0f1115;border:1px solid var(--line);border-radius:5px;padding:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.steps{display:grid;gap:8px}.step{display:grid;grid-template-columns:24px 1fr;gap:8px;align-items:start}.step b{display:grid;place-items:center;width:22px;height:22px;border-radius:5px;background:var(--panel2);border:1px solid var(--line);font:12px Consolas,monospace}
 .muted{color:var(--muted)}.ok{color:var(--accent2)}.warn{color:var(--warn)}.bad{color:var(--bad)}.hidden{display:none!important}
-@media(max-width:820px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
+@media(max-width:980px){main{grid-template-columns:1fr}.hero{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
 </style>
 </head>
 <body>
-<header><h1>DEX++ Helper</h1><span class="pill" id="statusPill">checking</span><span class="pill">Roblox-light dashboard</span></header>
+<header><h1>DEX++ Helper</h1><span class="pill" id="statusPill">checking</span><span class="pill" id="scriptPill">script unknown</span><span class="pill" id="dexPill">Roblox waiting</span></header>
 <main>
 <aside>
+  <div class="card">
+    <div class="title"><span class="dot warn" id="scriptDot"></span>Script delivery</div>
+    <div class="muted" id="scriptStatus">Checking DEX++_compiled.luau...</div>
+    <div class="codebox" id="loadstringBox" style="margin-top:8px">loadstring(game:HttpGet("http://localhost:8080/script"))()</div>
+    <div class="row" style="margin-top:8px"><button id="copyLoadstring" class="primary">Copy loadstring</button><button id="openScript">Open script</button></div>
+  </div>
+  <div class="card">
+    <div class="title"><span class="dot warn" id="dexDot"></span>Current Roblox session</div>
+    <div class="stateRows">
+      <div class="stateRow"><b id="gameName">Waiting for DEX</b><span id="gameMeta">Run the loadstring in Roblox to connect this dashboard.</span></div>
+      <div class="stateRow"><b id="indexTarget">No active index</b><span id="indexMeta">Code Search > Index Scripts will show progress here.</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="title">Worker roles</div>
+    <div id="workerRoles" class="stateRows">
+      <div class="stateRow"><b>Detecting workers</b><span>C++, Python, Rust role map will appear here.</span></div>
+    </div>
+  </div>
   <div class="card">
     <div class="title">Index</div>
     <div class="metrics">
@@ -1074,17 +1237,23 @@ input,textarea{width:100%;background:#0f1115;border:1px solid var(--line);color:
     <button class="tab active" data-view="resultsView">Results</button>
     <button class="tab" data-view="analysisView">Analysis</button>
     <button class="tab" data-view="remoteView">Remotes</button>
-    <button class="tab" data-view="helpView">Flow</button>
+    <button class="tab" data-view="helpView">First run guide</button>
   </div>
-  <div id="resultsView" class="results"><div class="hit"><h3>Ready</h3><div class="meta">Type a query and search the local index.</div></div></div>
+  <div id="resultsView" class="results">
+    <div class="hit"><h3>Search waits for an index</h3><div class="meta">Run DEX in Roblox, open Search Center, then use Index Scripts. Results appear here after helper receives cached source.</div></div>
+  </div>
   <div id="analysisView" class="results hidden"><div class="hit"><h3>No analysis yet</h3><pre id="analysisOut">Paste source and click Analyze or Normalize.</pre></div></div>
   <div id="remoteView" class="results hidden"><div class="hit"><h3>No remote analysis yet</h3><pre>Paste RemoteSpy logs and click Analyze Remotes.</pre></div></div>
   <div id="helpView" class="results hidden">
-    <div class="hit"><h3>Recommended Flow</h3><pre>1. Start DEX_Helper.exe.
-2. Run DEX in Roblox with Use Local Helper enabled only when indexing/searching.
-3. Use Code Search > Index Scripts once to push cached source here.
-4. Search/analyze in this dashboard while Roblox keeps rendering normally.
-5. Keep Log Property Changes To Helper disabled unless debugging property changes.</pre></div>
+    <div class="hit"><h3>First run guide</h3>
+      <div class="steps">
+        <div class="step"><b>1</b><div>Start <code>DEX_Helper.exe</code>. The top-left status should say active and Script delivery should say ready.</div></div>
+        <div class="step"><b>2</b><div>Copy the loadstring from the sidebar and run it in Roblox. The Roblox session card should switch from waiting to connected.</div></div>
+        <div class="step"><b>3</b><div>Open <code>Search Center</code> in DEX. Keep <code>Low ON</code> for smooth sessions, or use Full only when you can tolerate stutter.</div></div>
+        <div class="step"><b>4</b><div>Press <code>Index</code>. This dashboard will show the exact game, progress, cached scripts, failed scripts, and helper index size.</div></div>
+        <div class="step"><b>5</b><div>Search here after the index has source. This keeps browsing, ranking, and analysis outside the Roblox UI.</div></div>
+      </div>
+    </div>
   </div>
 </section>
 </main>
@@ -1094,26 +1263,36 @@ const fmt=n=>Number(n||0).toLocaleString();
 function setStatus(text, cls){const p=$('statusPill');p.textContent=text;p.className='pill '+(cls||'')}
 async function textFetch(path, opts={}){const r=await fetch(path,opts);const t=await r.text();if(!r.ok)throw new Error(t||r.statusText);return t}
 async function refreshStatus(){try{await textFetch('/status');setStatus('active','ok');const raw=await textFetch('/index-status');const j=JSON.parse(raw);$('scripts').textContent=fmt(j.scripts);$('bytes').textContent=fmt(j.bytes)}catch(e){setStatus('offline','bad')}}
+async function refreshScriptStatus(){try{const raw=await textFetch('/script-status');const j=JSON.parse(raw);const ok=!!j.ok;$('scriptDot').className='dot '+(ok?'ok':'bad');$('scriptPill').textContent=ok?'script ready':'script missing';$('scriptPill').className='pill '+(ok?'ok':'bad');$('scriptStatus').textContent=ok?`/script is ready (${fmt(j.bytes)} bytes from ${j.file}).`:'DEX++_compiled.luau was not found. Run python .\\build.py first.'}catch(e){$('scriptDot').className='dot bad';$('scriptPill').textContent='script error';$('scriptPill').className='pill bad';$('scriptStatus').textContent=e.message}}
+async function refreshWorkers(){try{const raw=await textFetch('/worker-status');const j=JSON.parse(raw);const roles=j.roles||[];$('workerRoles').innerHTML=roles.map(r=>`<div class="stateRow"><b>${esc(r.language)} <span class="${r.ready?'ok':'warn'}" style="display:inline">${r.ready?'ready':'source only'}</span></b><span>${esc(r.role||'')}</span></div>`).join('')||'<div class="stateRow"><b>No workers reported</b><span>Helper did not return role data.</span></div>'}catch(e){$('workerRoles').innerHTML='<div class="stateRow"><b class="bad">Worker status failed</b><span>'+esc(e.message)+'</span></div>'}}
 function pct(v){const n=Math.max(0,Math.min(1,Number(v||0)));return Math.round(n*100)}
-function toolLine(name,t){const progress=t.Progress!==undefined?pct(t.Progress):null;const cls=t.Load==='high'?'bad':(t.Load==='medium'||t.Load==='variable'?'warn':'ok');let meta=`${t.State||'unknown'} | load ${t.Load||'n/a'}`;if(t.Total!==undefined)meta+=` | ${progress}% | ${fmt(t.Cached)} cached | ${fmt(t.Decompiled)} new | ${fmt(t.Skipped)} skipped | ${fmt(t.Failed)} failed`;else if(name==='Remote Spy')meta+=` | ${fmt(t.Remotes)} remotes | ${fmt(t.Logs)} logs | ${fmt(t.Dropped)} dropped`;else if(name==='Property Tracker')meta+=` | ${fmt(t.Tracked)} objects | ${fmt(t.Properties)} props | ${fmt(t.Logs)} logs`;else if(name==='Thread Manager')meta+=` | ${fmt(t.Scripts)} scripts | ${fmt(t.Threads)} threads`;return `<div class="stateRow"><b>${esc(name)} <span class="${cls}" style="display:inline">${esc(t.State||'')}</span></b><span>${esc(meta)}</span>${progress!==null?`<div class="bar"><i style="width:${progress}%"></i></div>`:''}</div>`}
-async function refreshToolState(){try{const raw=await textFetch('/tool-state');const j=JSON.parse(raw);const tools=j.tools||{};const names=Object.keys(tools).sort((a,b)=>Number(tools[b].UpdatedAt||0)-Number(tools[a].UpdatedAt||0));$('liveDex').innerHTML=names.length?names.slice(0,6).map(n=>toolLine(n,tools[n]||{})).join(''):'<div class="stateRow"><b>No live tool state</b><span>DEX has not reported yet.</span></div>'}catch(e){$('liveDex').innerHTML='<div class="stateRow"><b class="bad">Live state unavailable</b><span>'+esc(e.message)+'</span></div>'}}
+function ago(ts){const n=Number(ts||0);if(!n)return 'never';const d=Math.max(0,Date.now()/1000-n);if(d<3)return 'now';if(d<60)return `${Math.floor(d)}s ago`;if(d<3600)return `${Math.floor(d/60)}m ago`;return `${Math.floor(d/3600)}h ago`}
+function toolLine(name,t){const progress=t.Progress!==undefined?pct(t.Progress):null;const cls=t.Load==='high'?'bad':(t.Load==='medium'||t.Load==='variable'?'warn':'ok');let meta=`${t.State||'unknown'} | load ${t.Load||'n/a'} | updated ${ago(t.UpdatedWallAt||0)}`;if(t.Total!==undefined)meta+=` | ${progress}% | ${fmt(t.Cached)} cached | ${fmt(t.Decompiled)} new | ${fmt(t.Skipped)} skipped | ${fmt(t.Failed)} failed`;else if(name==='Remote Spy')meta+=` | ${fmt(t.Remotes)} remotes | ${fmt(t.Logs)} logs | ${fmt(t.Dropped)} dropped`;else if(name==='Property Tracker')meta+=` | ${fmt(t.Tracked)} objects | ${fmt(t.Properties)} props | ${fmt(t.Logs)} logs`;else if(name==='Thread Manager')meta+=` | ${fmt(t.Scripts)} scripts | ${fmt(t.Threads)} threads`;return `<div class="stateRow"><b>${esc(name)} <span class="${cls}" style="display:inline">${esc(t.State||'')}</span></b><span>${esc(meta)}</span>${progress!==null?`<div class="bar"><i style="width:${progress}%"></i></div>`:''}</div>`}
+function updateSession(j){const game=j.game||{};const session=j.session||{};const connected=session.state==='connected'||Object.keys(j.tools||{}).length>0;$('dexDot').className='dot '+(connected?'ok':'warn');$('dexPill').textContent=connected?'Roblox connected':'Roblox waiting';$('dexPill').className='pill '+(connected?'ok':'warn');$('gameName').textContent=game.Name||'Waiting for DEX';$('gameMeta').textContent=game.PlaceId?`Place ${game.PlaceId} | Game ${game.GameId||'?'} | Job ${game.JobId||'?'} | ${session.executor||'executor unknown'}`:'Run the loadstring in Roblox to connect this dashboard.';const cs=(j.tools||{})['Code Search'];if(cs&&cs.State){const progress=cs.Progress!==undefined?` ${pct(cs.Progress)}%`:'';$('indexTarget').textContent=`Code Search: ${cs.State}${progress}`;$('indexMeta').textContent=`${fmt(cs.Cached)} cached | ${fmt(cs.Decompiled)} new | ${fmt(cs.Skipped)} skipped | ${fmt(cs.Failed)} failed | helper ${fmt(cs.HelperIndexed)}`}else{$('indexTarget').textContent='No active index';$('indexMeta').textContent='Code Search > Index Scripts will show progress here.'}}
+async function refreshToolState(){try{const raw=await textFetch('/tool-state');const j=JSON.parse(raw);updateSession(j);const tools=j.tools||{};const names=Object.keys(tools).sort((a,b)=>Number(tools[b].UpdatedAt||0)-Number(tools[a].UpdatedAt||0));$('liveDex').innerHTML=names.length?names.slice(0,6).map(n=>toolLine(n,tools[n]||{})).join(''):'<div class="stateRow"><b>No live tool state</b><span>DEX has not reported yet.</span></div>'}catch(e){$('liveDex').innerHTML='<div class="stateRow"><b class="bad">Live state unavailable</b><span>'+esc(e.message)+'</span></div>'}}
 function show(view){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.view===view));['resultsView','analysisView','remoteView','helpView'].forEach(id=>$(id).classList.toggle('hidden',id!==view))}
 function hitHtml(item){return `<div class="hit"><h3>${esc(item.name||item.key||'script')} <span class="muted">[${esc(item.className||'')}</span>]</h3><div class="meta">${esc(item.path||'')}</div><div class="meta">${esc(item.matchType||'hit')} score ${esc(item.score||0)} confidence ${Math.round(Number(item.confidence||0)*100)}%</div><pre>${esc(item.snippet||'')}</pre></div>`}
 function remoteHtml(item){const methods=Object.entries(item.methods||{}).map(([k,v])=>`${k}:${v}`).join(' ');const flags=(item.flags||[]).join(', ')||'none';const samples=(item.samples||[]).map(s=>`- ${s}`).join('\n');return `<div class="hit"><h3>${esc(item.path)} <span class="${Number(item.risk||0)>0?'warn':'ok'}">risk ${esc(item.risk||0)}</span></h3><div class="meta">calls ${esc(item.calls||0)} | out ${esc(item.outgoing||0)} | in ${esc(item.incoming||0)} | ${esc(methods)}</div><div class="meta">flags: ${esc(flags)}</div><pre>${esc(samples||'no args sample')}</pre></div>`}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 $('refresh').onclick=refreshStatus;
+$('copyLoadstring').onclick=async()=>{const text=$('loadstringBox').textContent;try{await navigator.clipboard.writeText(text);$('copyLoadstring').textContent='Copied';setTimeout(()=>$('copyLoadstring').textContent='Copy loadstring',900)}catch(e){$('copyLoadstring').textContent='Copy failed';setTimeout(()=>$('copyLoadstring').textContent='Copy loadstring',900)}};
+$('openScript').onclick=()=>window.open('/script','_blank');
 $('load').onclick=async()=>{await textFetch('/index-load',{method:'POST'});refreshStatus()};
 $('save').onclick=async()=>{await textFetch('/index-save',{method:'POST'});refreshStatus()};
 $('clear').onclick=async()=>{if(confirm('Clear helper index?')){await textFetch('/index-clear',{method:'POST'});refreshStatus();$('resultsView').innerHTML='<div class="hit"><h3>Index cleared</h3></div>'}};
 $('search').onclick=async()=>{const q=$('query').value.trim();if(!q)return;show('resultsView');$('resultsView').innerHTML='<div class="hit"><h3>Searching...</h3></div>';try{const raw=await textFetch('/search-source',{method:'POST',headers:{'Content-Type':'text/plain'},body:'120\n'+q});const j=JSON.parse(raw);$('resultsView').innerHTML=(j.results||[]).map(hitHtml).join('')||'<div class="hit"><h3>No results</h3></div>';refreshStatus()}catch(e){$('resultsView').innerHTML='<div class="hit"><h3 class="bad">Search failed</h3><pre>'+esc(e.message)+'</pre></div>'}};
 $('query').addEventListener('keydown',e=>{if(e.key==='Enter')$('search').click()});
-$('analyze').onclick=async()=>{show('analysisView');try{$('analysisOut').textContent=await textFetch('/analyze-source',{method:'POST',headers:{'Content-Type':'text/plain'},body:$('sourceBox').value})}catch(e){$('analysisOut').textContent=e.message}};
+$('analyze').onclick=async()=>{show('analysisView');try{$('analysisOut').textContent=await textFetch('/analyze-source-auto',{method:'POST',headers:{'Content-Type':'text/plain'},body:$('sourceBox').value})}catch(e){$('analysisOut').textContent=e.message}};
 $('normalize').onclick=async()=>{show('analysisView');try{$('analysisOut').textContent=await textFetch('/normalize-source',{method:'POST',headers:{'Content-Type':'text/plain'},body:$('sourceBox').value})}catch(e){$('analysisOut').textContent=e.message}};
 $('remoteAnalyze').onclick=async()=>{show('remoteView');$('remoteView').innerHTML='<div class="hit"><h3>Analyzing remotes...</h3></div>';try{const raw=await textFetch('/analyze-remotes',{method:'POST',headers:{'Content-Type':'text/plain'},body:$('remoteBox').value});const j=JSON.parse(raw);const head=`<div class="hit"><h3>Remote Contract Summary</h3><div class="meta">lines ${esc(j.lines||0)} | parsed ${esc(j.parsed||0)} | remotes ${esc(j.remotes||0)}</div></div>`;$('remoteView').innerHTML=head+((j.results||[]).map(remoteHtml).join('')||'<div class="hit"><h3>No RemoteSpy lines parsed</h3></div>')}catch(e){$('remoteView').innerHTML='<div class="hit"><h3 class="bad">Remote analysis failed</h3><pre>'+esc(e.message)+'</pre></div>'}};
 $('script').onclick=()=>window.open('/script','_blank');
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>show(b.dataset.view));
 refreshStatus();
+refreshScriptStatus();
+refreshWorkers();
 refreshToolState();
+setInterval(refreshScriptStatus,5000);
+setInterval(refreshWorkers,5000);
 setInterval(refreshToolState,1000);
 </script>
 </body>
@@ -1362,6 +1541,10 @@ void handle_client(SOCKET ClientSocket) {
             send_response(ClientSocket, 200, "OK", helper_dashboard_html(), "text/html; charset=utf-8");
         } else if (path == "/status" && method == "GET") {
             send_response(ClientSocket, 200, "OK", "DEX++ C++ Helper Server Active");
+        } else if (path == "/worker-status" && method == "GET") {
+            send_response(ClientSocket, 200, "OK", worker_status(), "application/json");
+        } else if (path == "/script-status" && method == "GET") {
+            send_response(ClientSocket, 200, "OK", script_status_response(), "application/json");
         } else if (path == "/script" && method == "GET") {
             std::ifstream script_file("DEX++_compiled.luau");
             if (!script_file.is_open()) {
@@ -1392,7 +1575,13 @@ void handle_client(SOCKET ClientSocket) {
         } else if ((path == "/normalize-source" || path == "/deobfuscate") && method == "POST") {
             send_response(ClientSocket, 200, "OK", normalize_source(body));
         } else if (path == "/analyze-source" && method == "POST") {
-            send_response(ClientSocket, 200, "OK", analyze_source(body));
+            send_response(ClientSocket, 200, "OK", analyze_source(body), "application/json");
+        } else if (path == "/analyze-source-fast" && method == "POST") {
+            send_response(ClientSocket, 200, "OK", analyze_source_fast(body), "application/json");
+        } else if (path == "/analyze-source-deep" && method == "POST") {
+            send_response(ClientSocket, 200, "OK", analyze_source_deep(body), "application/json");
+        } else if (path == "/analyze-source-auto" && method == "POST") {
+            send_response(ClientSocket, 200, "OK", analyze_source_auto(body), "application/json");
         } else if (path == "/analyze-remotes" && method == "POST") {
             send_response(ClientSocket, 200, "OK", analyze_remote_logs(body), "application/json");
         } else if (path == "/index-source" && method == "POST") {

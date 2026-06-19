@@ -47,7 +47,7 @@ local function main()
 	local filter_text = ""
 
 	local window, list_frame, scroll_v, status_label, empty_label
-	local path_box, decompile_btn, explore_btn, inspect_btn, error_label
+	local path_box, decompile_btn, explore_btn, inspect_btn, relations_btn, error_label
 	local rebuild_list
 
 	local function scan_modules()
@@ -130,6 +130,8 @@ local function main()
 			explore_btn.BackgroundColor3 = settings_ref.Theme.Main1
 			inspect_btn.Active = false
 			inspect_btn.BackgroundColor3 = settings_ref.Theme.Main1
+			relations_btn.Active = false
+			relations_btn.BackgroundColor3 = settings_ref.Theme.Main1
 			error_label.Text = ""
 			return
 		end
@@ -142,6 +144,8 @@ local function main()
 		explore_btn.BackgroundColor3 = settings_ref.Theme.Button
 		inspect_btn.Active = true
 		inspect_btn.BackgroundColor3 = settings_ref.Theme.Button
+		relations_btn.Active = true
+		relations_btn.BackgroundColor3 = settings_ref.Theme.Button
 		error_label.Text = ""
 	end
 
@@ -415,11 +419,12 @@ local function main()
 		decompile_btn = make_btn(right_panel, "Decompile Source", 78, 28)
 		explore_btn   = make_btn(right_panel, "View in Explorer", 112, 28)
 		inspect_btn   = make_btn(right_panel, "Inspect Return Value", 146, 28)
+		relations_btn = make_btn(right_panel, "Show Script Relations", 180, 28)
 
 		error_label = Instance.new("TextLabel", right_panel)
 		error_label.BackgroundTransparency = 1
-		error_label.Position = UDim2.new(0, 10, 0, 185)
-		error_label.Size = UDim2.new(1, -20, 1, -195)
+		error_label.Position = UDim2.new(0, 10, 0, 220)
+		error_label.Size = UDim2.new(1, -20, 1, -230)
 		error_label.Font = get_theme() and get_theme().MapFont(Enum.Font.SourceSans) or Enum.Font.SourceSans
 		error_label.TextSize = 12
 		error_label.TextColor3 = Color3.fromRGB(239, 68, 68) -- red error
@@ -483,6 +488,17 @@ local function main()
 					error_label.TextColor3 = Color3.fromRGB(239, 68, 68)
 				end
 			end)
+		end)
+
+		relations_btn.MouseButton1Click:Connect(function()
+			if not selected_module then return end
+			local rel = apps_ref.ScriptRelations
+			if rel and rel.ShowForScript then
+				rel.ShowForScript(selected_module)
+			else
+				error_label.Text = "Script Relations plugin not found/active."
+				error_label.TextColor3 = Color3.fromRGB(239, 68, 68)
+			end
 		end)
 
 		scan_modules()

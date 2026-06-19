@@ -35,9 +35,10 @@ end
 
 local function main()
 	local CodeSearch = {}
-	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, filterButton, resultContextMenu
+	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, allFilterButton, resultContextMenu
 	local indexing = false
 	local searching = false
+	local smartMode = false
 	local cancelRequested = false
 	local operationId = 0
 	local currentScriptsByKey = {}
@@ -49,8 +50,15 @@ local function main()
 	local reviewedKeys = {}
 	local indexedKeys = {}
 	local helperIndexedKeys = {}
-	local searchFilter = "All"
-	local filterOrder = {"All", "Code", "Path", "Name", "Class", "Failed"}
+	local searchFilters = {
+		Code = true,
+		Path = true,
+		Name = true,
+		Class = true,
+		Failed = false,
+	}
+	local filterButtons = {}
+	local filterOrder = {"Code", "Path", "Name", "Class", "Failed"}
 
 	local function setStatus(text)
 		if statusLabel then
@@ -94,10 +102,125 @@ local function main()
 		end
 	end
 
-	local function updateFilterButton()
-		if filterButton then
-			filterButton.Text = "Filter: " .. searchFilter
+	local function updateSmartButton(button)
+		if not button then return end
+		if smartMode then
+			button.Text = "Smart ON"
+			button.BackgroundColor3 = Settings.Theme.AccentSoft or Settings.Theme.Main1
+			button.TextColor3 = Settings.Theme.Text
+			local stroke = button:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Color = Settings.Theme.Highlight
+				stroke.Transparency = 0.12
+			end
+		else
+			button.Text = "Smart OFF"
+			button.BackgroundColor3 = Settings.Theme.Button
+			button.TextColor3 = Settings.Theme.PlaceholderText
+			local stroke = button:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Color = Settings.Theme.Outline2
+				stroke.Transparency = 0.45
+			end
 		end
+	end
+
+	local function filterEnabled(name)
+		return searchFilters[name] == true
+	end
+
+	local function hasAnyFilter()
+		for _, name in ipairs(filterOrder) do
+			if filterEnabled(name) then return true end
+		end
+		return false
+	end
+
+	local function activeFilterSummary()
+		local active = {}
+		for _, name in ipairs(filterOrder) do
+			if filterEnabled(name) then
+				active[#active + 1] = name
+			end
+		end
+		if #active == 0 then return "None" end
+		if filterEnabled("Code") and filterEnabled("Path") and filterEnabled("Name") and filterEnabled("Class") and not filterEnabled("Failed") then
+			return "All"
+		end
+		return table.concat(active, "+")
+	end
+
+	local function updateFilterButtons()
+		for name, button in pairs(filterButtons) do
+			local active = filterEnabled(name)
+			button.BackgroundColor3 = active and (Settings.Theme.AccentSoft or Settings.Theme.Main1) or Settings.Theme.Button
+			button.TextColor3 = active and Settings.Theme.Text or Settings.Theme.PlaceholderText
+			local stroke = button:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Color = active and Settings.Theme.Highlight or Settings.Theme.Outline2
+				stroke.Transparency = active and 0.12 or 0.45
+			end
+		end
+
+		if allFilterButton then
+			allFilterButton.Text = "All"
+			local isDefault = filterEnabled("Code") and filterEnabled("Path") and filterEnabled("Name") and filterEnabled("Class") and not filterEnabled("Failed")
+			allFilterButton.BackgroundColor3 = isDefault and (Settings.Theme.AccentSoft or Settings.Theme.Main1) or Settings.Theme.Button
+			allFilterButton.TextColor3 = isDefault and Settings.Theme.Text or Settings.Theme.PlaceholderText
+			local stroke = allFilterButton:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Color = isDefault and Settings.Theme.Highlight or Settings.Theme.Outline2
+				stroke.Transparency = isDefault and 0.12 or 0.45
+			end
+		end
+	end
+
+	local function setDefaultFilters()
+		searchFilters.Code = true
+		searchFilters.Path = true
+		searchFilters.Name = true
+		searchFilters.Class = true
+		searchFilters.Failed = false
+		updateFilterButtons()
+		setStatus("Filters: " .. activeFilterSummary() .. ".")
+	end
+
+	local function styleFilterChip(button)
+		button.BorderSizePixel = 0
+		button.Font = Enum.Font.SourceSansBold
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 5)
+		corner.Parent = button
+		local stroke = Instance.new("UIStroke")
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Color = Settings.Theme.Outline2
+		stroke.Thickness = 1
+		stroke.Transparency = 0.45
+		stroke.Parent = button
+	end
+
+	local function wireFilterChipHover(button, name)
+		button.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+				if not name or not filterEnabled(name) then
+					button.BackgroundColor3 = Settings.Theme.Main1
+				end
+			end
+		end)
+		button.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+				updateFilterButtons()
+			end
+		end)
+	end
+
+	local function toggleSearchFilter(name)
+		searchFilters[name] = not searchFilters[name]
+		if not hasAnyFilter() then
+			searchFilters[name] = true
+		end
+		updateFilterButtons()
+		setStatus("Filters: " .. activeFilterSummary() .. ".")
 	end
 
 	local function sourceHasText(source)
@@ -113,13 +236,6 @@ local function main()
 			or lowered:find("failed to get script bytecode", 1, true) ~= nil
 			or lowered:find("error occurred while requesting", 1, true) ~= nil
 			or lowered:find("deserialization failed", 1, true) ~= nil
-	end
-
-	local function cycleSearchFilter()
-		local index = table.find(filterOrder, searchFilter) or 1
-		searchFilter = filterOrder[(index % #filterOrder) + 1]
-		updateFilterButton()
-		setStatus("Filter set to " .. searchFilter .. ".")
 	end
 
 	local function decodeJson(body)
@@ -194,6 +310,10 @@ local function main()
 
 	local function hasFreshCache(scriptInstance)
 		if not env.DecompileCache or not env.DecompileCache.HasFresh then return false end
+		if env.DecompileCache.HasFreshFast then
+			local fastSuccess, fastFresh = pcall(env.DecompileCache.HasFreshFast, scriptInstance)
+			if fastSuccess then return fastFresh == true end
+		end
 		local success, fresh = pcall(env.DecompileCache.HasFresh, scriptInstance)
 		return success and fresh == true
 	end
@@ -238,7 +358,7 @@ local function main()
 		updateInspector(nil)
 	end
 
-	local function makeButton(parent, text, position, size)
+	local function makeButton(parent, text, position, size, noAnim)
 		local button = Instance.new("TextButton")
 		button.AutoButtonColor = false
 		button.BackgroundColor3 = Settings.Theme.Button
@@ -250,7 +370,9 @@ local function main()
 		button.TextColor3 = Settings.Theme.Text
 		button.TextSize = 14
 		button.Parent = parent
-		Lib.ButtonAnim(button,{Mode = 2, StartColor = Settings.Theme.Button, HoverColor = Settings.Theme.ButtonHover, PressColor = Settings.Theme.ButtonPress, OutlineColor = Settings.Theme.Outline2})
+		if not noAnim then
+			Lib.ButtonAnim(button,{Mode = 2, StartColor = Settings.Theme.Button, HoverColor = Settings.Theme.ButtonHover, PressColor = Settings.Theme.ButtonPress, OutlineColor = Settings.Theme.Outline2})
+		end
 		return button
 	end
 
@@ -338,23 +460,28 @@ local function main()
 		local loweredSource = tostring(source or ""):lower()
 		local failed = isFailureSource(source)
 
-		if searchFilter == "Failed" then
-			return failed and (loweredQuery == "" or path:find(loweredQuery, 1, true) or name:find(loweredQuery, 1, true) or className:find(loweredQuery, 1, true) or loweredSource:find(loweredQuery, 1, true))
+		if filterEnabled("Failed") and failed then
+			return loweredQuery == ""
+				or path:find(loweredQuery, 1, true) ~= nil
+				or name:find(loweredQuery, 1, true) ~= nil
+				or className:find(loweredQuery, 1, true) ~= nil
+				or loweredSource:find(loweredQuery, 1, true) ~= nil
 		end
+
 		if loweredQuery == "" then return false end
-		if searchFilter == "Code" then
-			return sourceHasText(source) and not failed and loweredSource:find(loweredQuery, 1, true) ~= nil
-		elseif searchFilter == "Path" then
-			return path:find(loweredQuery, 1, true) ~= nil
-		elseif searchFilter == "Name" then
-			return name:find(loweredQuery, 1, true) ~= nil
-		elseif searchFilter == "Class" then
-			return className:find(loweredQuery, 1, true) ~= nil
+		if filterEnabled("Code") and sourceHasText(source) and not failed and loweredSource:find(loweredQuery, 1, true) ~= nil then
+			return true
 		end
-		return loweredSource:find(loweredQuery, 1, true) ~= nil
-			or path:find(loweredQuery, 1, true) ~= nil
-			or name:find(loweredQuery, 1, true) ~= nil
-			or className:find(loweredQuery, 1, true) ~= nil
+		if filterEnabled("Path") and path:find(loweredQuery, 1, true) ~= nil then
+			return true
+		end
+		if filterEnabled("Name") and name:find(loweredQuery, 1, true) ~= nil then
+			return true
+		end
+		if filterEnabled("Class") and className:find(loweredQuery, 1, true) ~= nil then
+			return true
+		end
+		return false
 	end
 
 	local function copyText(text, okMessage)
@@ -586,16 +713,6 @@ local function main()
 			setStatus("Dependency Graph opened.")
 		else
 			setStatus("Dependency Graph is unavailable.")
-		end
-	end
-
-	local function openSmartSearch()
-		local smart = Apps.SmartSearch
-		if smart and ensureTool(smart) then
-			if smart.Window then smart.Window:Show() end
-			setStatus("Smart Search opened inside Search Center.")
-		else
-			setStatus("Smart Search is unavailable.")
 		end
 	end
 
@@ -888,13 +1005,19 @@ local function main()
 		local token = beginOperation()
 		local query = tostring(searchBox.Text or ""):lower()
 		clearResults()
-		if query == "" and searchFilter ~= "Failed" then
-			setStatus("Enter a keyword to search cached code, or switch filter to Failed.")
+		if query == "" and not filterEnabled("Failed") then
+			setStatus("Enter a keyword to search cached code, or enable Failed filter.")
 			searching = false
 			return
 		end
 
-		if (searchFilter == "All" or searchFilter == "Code") and searchWithHelper(query) then
+		local helperOnlyCode = filterEnabled("Code")
+			and not filterEnabled("Path")
+			and not filterEnabled("Name")
+			and not filterEnabled("Class")
+			and not filterEnabled("Failed")
+		local preferSmartHelper = smartMode and query ~= "" and not filterEnabled("Failed")
+		if (preferSmartHelper or helperOnlyCode) and searchWithHelper(query) then
 			searching = false
 			return
 		end
@@ -932,7 +1055,7 @@ local function main()
 		end
 
 		searching = false
-		setStatus(("Filter %s: found %d result(s) in %d cached script(s)."):format(searchFilter, found, scanned))
+		setStatus(("Filters %s: found %d result(s) in %d cached script(s)."):format(activeFilterSummary(), found, scanned))
 	end
 
 	CodeSearch.IndexScripts = function()
@@ -1165,16 +1288,32 @@ local function main()
 
 		local indexButton = makeButton(toolbar, "Index", UDim2.new(1,-304,0,6), UDim2.new(0,66,0,22))
 		local searchButton = makeButton(toolbar, "Search", UDim2.new(1,-234,0,6), UDim2.new(0,66,0,22))
-		local smartButton = makeButton(toolbar, "Smart", UDim2.new(1,-164,0,6), UDim2.new(0,66,0,22))
+		local smartButton = makeButton(toolbar, "Smart OFF", UDim2.new(1,-164,0,6), UDim2.new(0,76,0,22), true)
+		styleFilterChip(smartButton)
 		local stopButton = makeButton(toolbar, "Stop", UDim2.new(1,-74,0,6), UDim2.new(0,68,0,22))
-		filterButton = makeButton(toolbar, "Filter: All", UDim2.new(0,6,0,32), UDim2.new(0,108,0,20))
+		allFilterButton = makeButton(toolbar, "All", UDim2.new(0,6,0,32), UDim2.new(0,42,0,20), true)
+		styleFilterChip(allFilterButton)
+		wireFilterChipHover(allFilterButton, nil)
+		local filterX = 52
+		for _, filterName in ipairs(filterOrder) do
+			local width = filterName == "Failed" and 54 or 46
+			local button = makeButton(toolbar, filterName, UDim2.new(0,filterX,0,32), UDim2.new(0,width,0,20), true)
+			button.TextSize = 12
+			styleFilterChip(button)
+			wireFilterChipHover(button, filterName)
+			filterButtons[filterName] = button
+			filterX += width + 4
+			button.MouseButton1Click:Connect(function()
+				toggleSearchFilter(filterName)
+			end)
+		end
 		lowImpactButton = makeButton(toolbar, "Low ON", UDim2.new(1,-82,0,32), UDim2.new(0,76,0,20))
 
 		statusLabel = Instance.new("TextLabel")
 		statusLabel.BackgroundTransparency = 1
 		statusLabel.Font = Enum.Font.SourceSans
-		statusLabel.Position = UDim2.new(0,120,0,32)
-		statusLabel.Size = UDim2.new(1,-208,0,20)
+		statusLabel.Position = UDim2.new(0,330,0,32)
+		statusLabel.Size = UDim2.new(1,-418,0,20)
 		statusLabel.Text = "Low Impact is ON: Index uses cache/helper and skips new decompile."
 		reportTool({State = "idle", Load = "low", LowImpact = isLowImpactIndex()})
 		statusLabel.TextColor3 = Settings.Theme.PlaceholderText
@@ -1211,9 +1350,17 @@ local function main()
 
 		indexButton.MouseButton1Click:Connect(CodeSearch.IndexScripts)
 		searchButton.MouseButton1Click:Connect(CodeSearch.Search)
-		smartButton.MouseButton1Click:Connect(openSmartSearch)
+		smartButton.MouseButton1Click:Connect(function()
+			smartMode = not smartMode
+			updateSmartButton(smartButton)
+			if smartMode then
+				setStatus("Smart Search is ON: helper ranked source/path/name/identifier matching is preferred.")
+			else
+				setStatus("Smart Search is OFF: using local exact filtered search.")
+			end
+		end)
 		stopButton.MouseButton1Click:Connect(CodeSearch.Stop)
-		filterButton.MouseButton1Click:Connect(cycleSearchFilter)
+		allFilterButton.MouseButton1Click:Connect(setDefaultFilters)
 		lowImpactButton.MouseButton1Click:Connect(function()
 			Settings.Decompiler.CodeSearchLowImpact = not isLowImpactIndex()
 			updateLowImpactButton()
@@ -1224,7 +1371,8 @@ local function main()
 			end
 		end)
 		updateLowImpactButton()
-		updateFilterButton()
+		updateSmartButton(smartButton)
+		updateFilterButtons()
 		searchBox.FocusLost:Connect(function(enterPressed)
 			if enterPressed then
 				CodeSearch.Search()

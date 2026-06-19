@@ -17807,9 +17807,10 @@ end,
     
     local function main()
     	local CodeSearch = {}
-    	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, filterButton, resultContextMenu
+    	local window, searchBox, statusLabel, resultsFrame, sidePanel, sideTitle, sidePath, sideMeta, sidePreview, sideBadges, lowImpactButton, allFilterButton, resultContextMenu
     	local indexing = false
     	local searching = false
+    	local smartMode = false
     	local cancelRequested = false
     	local operationId = 0
     	local currentScriptsByKey = {}
@@ -17821,8 +17822,15 @@ end,
     	local reviewedKeys = {}
     	local indexedKeys = {}
     	local helperIndexedKeys = {}
-    	local searchFilter = "All"
-    	local filterOrder = {"All", "Code", "Path", "Name", "Class", "Failed"}
+    	local searchFilters = {
+    		Code = true,
+    		Path = true,
+    		Name = true,
+    		Class = true,
+    		Failed = false,
+    	}
+    	local filterButtons = {}
+    	local filterOrder = {"Code", "Path", "Name", "Class", "Failed"}
     
     	local function setStatus(text)
     		if statusLabel then
@@ -17866,10 +17874,125 @@ end,
     		end
     	end
     
-    	local function updateFilterButton()
-    		if filterButton then
-    			filterButton.Text = "Filter: " .. searchFilter
+    	local function updateSmartButton(button)
+    		if not button then return end
+    		if smartMode then
+    			button.Text = "Smart ON"
+    			button.BackgroundColor3 = Settings.Theme.AccentSoft or Settings.Theme.Main1
+    			button.TextColor3 = Settings.Theme.Text
+    			local stroke = button:FindFirstChildOfClass("UIStroke")
+    			if stroke then
+    				stroke.Color = Settings.Theme.Highlight
+    				stroke.Transparency = 0.12
+    			end
+    		else
+    			button.Text = "Smart OFF"
+    			button.BackgroundColor3 = Settings.Theme.Button
+    			button.TextColor3 = Settings.Theme.PlaceholderText
+    			local stroke = button:FindFirstChildOfClass("UIStroke")
+    			if stroke then
+    				stroke.Color = Settings.Theme.Outline2
+    				stroke.Transparency = 0.45
+    			end
     		end
+    	end
+    
+    	local function filterEnabled(name)
+    		return searchFilters[name] == true
+    	end
+    
+    	local function hasAnyFilter()
+    		for _, name in ipairs(filterOrder) do
+    			if filterEnabled(name) then return true end
+    		end
+    		return false
+    	end
+    
+    	local function activeFilterSummary()
+    		local active = {}
+    		for _, name in ipairs(filterOrder) do
+    			if filterEnabled(name) then
+    				active[#active + 1] = name
+    			end
+    		end
+    		if #active == 0 then return "None" end
+    		if filterEnabled("Code") and filterEnabled("Path") and filterEnabled("Name") and filterEnabled("Class") and not filterEnabled("Failed") then
+    			return "All"
+    		end
+    		return table.concat(active, "+")
+    	end
+    
+    	local function updateFilterButtons()
+    		for name, button in pairs(filterButtons) do
+    			local active = filterEnabled(name)
+    			button.BackgroundColor3 = active and (Settings.Theme.AccentSoft or Settings.Theme.Main1) or Settings.Theme.Button
+    			button.TextColor3 = active and Settings.Theme.Text or Settings.Theme.PlaceholderText
+    			local stroke = button:FindFirstChildOfClass("UIStroke")
+    			if stroke then
+    				stroke.Color = active and Settings.Theme.Highlight or Settings.Theme.Outline2
+    				stroke.Transparency = active and 0.12 or 0.45
+    			end
+    		end
+    
+    		if allFilterButton then
+    			allFilterButton.Text = "All"
+    			local isDefault = filterEnabled("Code") and filterEnabled("Path") and filterEnabled("Name") and filterEnabled("Class") and not filterEnabled("Failed")
+    			allFilterButton.BackgroundColor3 = isDefault and (Settings.Theme.AccentSoft or Settings.Theme.Main1) or Settings.Theme.Button
+    			allFilterButton.TextColor3 = isDefault and Settings.Theme.Text or Settings.Theme.PlaceholderText
+    			local stroke = allFilterButton:FindFirstChildOfClass("UIStroke")
+    			if stroke then
+    				stroke.Color = isDefault and Settings.Theme.Highlight or Settings.Theme.Outline2
+    				stroke.Transparency = isDefault and 0.12 or 0.45
+    			end
+    		end
+    	end
+    
+    	local function setDefaultFilters()
+    		searchFilters.Code = true
+    		searchFilters.Path = true
+    		searchFilters.Name = true
+    		searchFilters.Class = true
+    		searchFilters.Failed = false
+    		updateFilterButtons()
+    		setStatus("Filters: " .. activeFilterSummary() .. ".")
+    	end
+    
+    	local function styleFilterChip(button)
+    		button.BorderSizePixel = 0
+    		button.Font = Enum.Font.SourceSansBold
+    		local corner = Instance.new("UICorner")
+    		corner.CornerRadius = UDim.new(0, 5)
+    		corner.Parent = button
+    		local stroke = Instance.new("UIStroke")
+    		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    		stroke.Color = Settings.Theme.Outline2
+    		stroke.Thickness = 1
+    		stroke.Transparency = 0.45
+    		stroke.Parent = button
+    	end
+    
+    	local function wireFilterChipHover(button, name)
+    		button.InputBegan:Connect(function(input)
+    			if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+    				if not name or not filterEnabled(name) then
+    					button.BackgroundColor3 = Settings.Theme.Main1
+    				end
+    			end
+    		end)
+    		button.InputEnded:Connect(function(input)
+    			if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+    				updateFilterButtons()
+    			end
+    		end)
+    	end
+    
+    	local function toggleSearchFilter(name)
+    		searchFilters[name] = not searchFilters[name]
+    		if not hasAnyFilter() then
+    			searchFilters[name] = true
+    		end
+    		updateFilterButtons()
+    		setStatus("Filters: " .. activeFilterSummary() .. ".")
     	end
     
     	local function sourceHasText(source)
@@ -17885,13 +18008,6 @@ end,
     			or lowered:find("failed to get script bytecode", 1, true) ~= nil
     			or lowered:find("error occurred while requesting", 1, true) ~= nil
     			or lowered:find("deserialization failed", 1, true) ~= nil
-    	end
-    
-    	local function cycleSearchFilter()
-    		local index = table.find(filterOrder, searchFilter) or 1
-    		searchFilter = filterOrder[(index % #filterOrder) + 1]
-    		updateFilterButton()
-    		setStatus("Filter set to " .. searchFilter .. ".")
     	end
     
     	local function decodeJson(body)
@@ -17966,6 +18082,10 @@ end,
     
     	local function hasFreshCache(scriptInstance)
     		if not env.DecompileCache or not env.DecompileCache.HasFresh then return false end
+    		if env.DecompileCache.HasFreshFast then
+    			local fastSuccess, fastFresh = pcall(env.DecompileCache.HasFreshFast, scriptInstance)
+    			if fastSuccess then return fastFresh == true end
+    		end
     		local success, fresh = pcall(env.DecompileCache.HasFresh, scriptInstance)
     		return success and fresh == true
     	end
@@ -18010,7 +18130,7 @@ end,
     		updateInspector(nil)
     	end
     
-    	local function makeButton(parent, text, position, size)
+    	local function makeButton(parent, text, position, size, noAnim)
     		local button = Instance.new("TextButton")
     		button.AutoButtonColor = false
     		button.BackgroundColor3 = Settings.Theme.Button
@@ -18022,7 +18142,9 @@ end,
     		button.TextColor3 = Settings.Theme.Text
     		button.TextSize = 14
     		button.Parent = parent
-    		Lib.ButtonAnim(button,{Mode = 2, StartColor = Settings.Theme.Button, HoverColor = Settings.Theme.ButtonHover, PressColor = Settings.Theme.ButtonPress, OutlineColor = Settings.Theme.Outline2})
+    		if not noAnim then
+    			Lib.ButtonAnim(button,{Mode = 2, StartColor = Settings.Theme.Button, HoverColor = Settings.Theme.ButtonHover, PressColor = Settings.Theme.ButtonPress, OutlineColor = Settings.Theme.Outline2})
+    		end
     		return button
     	end
     
@@ -18110,23 +18232,28 @@ end,
     		local loweredSource = tostring(source or ""):lower()
     		local failed = isFailureSource(source)
     
-    		if searchFilter == "Failed" then
-    			return failed and (loweredQuery == "" or path:find(loweredQuery, 1, true) or name:find(loweredQuery, 1, true) or className:find(loweredQuery, 1, true) or loweredSource:find(loweredQuery, 1, true))
+    		if filterEnabled("Failed") and failed then
+    			return loweredQuery == ""
+    				or path:find(loweredQuery, 1, true) ~= nil
+    				or name:find(loweredQuery, 1, true) ~= nil
+    				or className:find(loweredQuery, 1, true) ~= nil
+    				or loweredSource:find(loweredQuery, 1, true) ~= nil
     		end
+    
     		if loweredQuery == "" then return false end
-    		if searchFilter == "Code" then
-    			return sourceHasText(source) and not failed and loweredSource:find(loweredQuery, 1, true) ~= nil
-    		elseif searchFilter == "Path" then
-    			return path:find(loweredQuery, 1, true) ~= nil
-    		elseif searchFilter == "Name" then
-    			return name:find(loweredQuery, 1, true) ~= nil
-    		elseif searchFilter == "Class" then
-    			return className:find(loweredQuery, 1, true) ~= nil
+    		if filterEnabled("Code") and sourceHasText(source) and not failed and loweredSource:find(loweredQuery, 1, true) ~= nil then
+    			return true
     		end
-    		return loweredSource:find(loweredQuery, 1, true) ~= nil
-    			or path:find(loweredQuery, 1, true) ~= nil
-    			or name:find(loweredQuery, 1, true) ~= nil
-    			or className:find(loweredQuery, 1, true) ~= nil
+    		if filterEnabled("Path") and path:find(loweredQuery, 1, true) ~= nil then
+    			return true
+    		end
+    		if filterEnabled("Name") and name:find(loweredQuery, 1, true) ~= nil then
+    			return true
+    		end
+    		if filterEnabled("Class") and className:find(loweredQuery, 1, true) ~= nil then
+    			return true
+    		end
+    		return false
     	end
     
     	local function copyText(text, okMessage)
@@ -18358,16 +18485,6 @@ end,
     			setStatus("Dependency Graph opened.")
     		else
     			setStatus("Dependency Graph is unavailable.")
-    		end
-    	end
-    
-    	local function openSmartSearch()
-    		local smart = Apps.SmartSearch
-    		if smart and ensureTool(smart) then
-    			if smart.Window then smart.Window:Show() end
-    			setStatus("Smart Search opened inside Search Center.")
-    		else
-    			setStatus("Smart Search is unavailable.")
     		end
     	end
     
@@ -18660,13 +18777,19 @@ end,
     		local token = beginOperation()
     		local query = tostring(searchBox.Text or ""):lower()
     		clearResults()
-    		if query == "" and searchFilter ~= "Failed" then
-    			setStatus("Enter a keyword to search cached code, or switch filter to Failed.")
+    		if query == "" and not filterEnabled("Failed") then
+    			setStatus("Enter a keyword to search cached code, or enable Failed filter.")
     			searching = false
     			return
     		end
     
-    		if (searchFilter == "All" or searchFilter == "Code") and searchWithHelper(query) then
+    		local helperOnlyCode = filterEnabled("Code")
+    			and not filterEnabled("Path")
+    			and not filterEnabled("Name")
+    			and not filterEnabled("Class")
+    			and not filterEnabled("Failed")
+    		local preferSmartHelper = smartMode and query ~= "" and not filterEnabled("Failed")
+    		if (preferSmartHelper or helperOnlyCode) and searchWithHelper(query) then
     			searching = false
     			return
     		end
@@ -18704,7 +18827,7 @@ end,
     		end
     
     		searching = false
-    		setStatus(("Filter %s: found %d result(s) in %d cached script(s)."):format(searchFilter, found, scanned))
+    		setStatus(("Filters %s: found %d result(s) in %d cached script(s)."):format(activeFilterSummary(), found, scanned))
     	end
     
     	CodeSearch.IndexScripts = function()
@@ -18937,16 +19060,32 @@ end,
     
     		local indexButton = makeButton(toolbar, "Index", UDim2.new(1,-304,0,6), UDim2.new(0,66,0,22))
     		local searchButton = makeButton(toolbar, "Search", UDim2.new(1,-234,0,6), UDim2.new(0,66,0,22))
-    		local smartButton = makeButton(toolbar, "Smart", UDim2.new(1,-164,0,6), UDim2.new(0,66,0,22))
+    		local smartButton = makeButton(toolbar, "Smart OFF", UDim2.new(1,-164,0,6), UDim2.new(0,76,0,22), true)
+    		styleFilterChip(smartButton)
     		local stopButton = makeButton(toolbar, "Stop", UDim2.new(1,-74,0,6), UDim2.new(0,68,0,22))
-    		filterButton = makeButton(toolbar, "Filter: All", UDim2.new(0,6,0,32), UDim2.new(0,108,0,20))
+    		allFilterButton = makeButton(toolbar, "All", UDim2.new(0,6,0,32), UDim2.new(0,42,0,20), true)
+    		styleFilterChip(allFilterButton)
+    		wireFilterChipHover(allFilterButton, nil)
+    		local filterX = 52
+    		for _, filterName in ipairs(filterOrder) do
+    			local width = filterName == "Failed" and 54 or 46
+    			local button = makeButton(toolbar, filterName, UDim2.new(0,filterX,0,32), UDim2.new(0,width,0,20), true)
+    			button.TextSize = 12
+    			styleFilterChip(button)
+    			wireFilterChipHover(button, filterName)
+    			filterButtons[filterName] = button
+    			filterX += width + 4
+    			button.MouseButton1Click:Connect(function()
+    				toggleSearchFilter(filterName)
+    			end)
+    		end
     		lowImpactButton = makeButton(toolbar, "Low ON", UDim2.new(1,-82,0,32), UDim2.new(0,76,0,20))
     
     		statusLabel = Instance.new("TextLabel")
     		statusLabel.BackgroundTransparency = 1
     		statusLabel.Font = Enum.Font.SourceSans
-    		statusLabel.Position = UDim2.new(0,120,0,32)
-    		statusLabel.Size = UDim2.new(1,-208,0,20)
+    		statusLabel.Position = UDim2.new(0,330,0,32)
+    		statusLabel.Size = UDim2.new(1,-418,0,20)
     		statusLabel.Text = "Low Impact is ON: Index uses cache/helper and skips new decompile."
     		reportTool({State = "idle", Load = "low", LowImpact = isLowImpactIndex()})
     		statusLabel.TextColor3 = Settings.Theme.PlaceholderText
@@ -18983,9 +19122,17 @@ end,
     
     		indexButton.MouseButton1Click:Connect(CodeSearch.IndexScripts)
     		searchButton.MouseButton1Click:Connect(CodeSearch.Search)
-    		smartButton.MouseButton1Click:Connect(openSmartSearch)
+    		smartButton.MouseButton1Click:Connect(function()
+    			smartMode = not smartMode
+    			updateSmartButton(smartButton)
+    			if smartMode then
+    				setStatus("Smart Search is ON: helper ranked source/path/name/identifier matching is preferred.")
+    			else
+    				setStatus("Smart Search is OFF: using local exact filtered search.")
+    			end
+    		end)
     		stopButton.MouseButton1Click:Connect(CodeSearch.Stop)
-    		filterButton.MouseButton1Click:Connect(cycleSearchFilter)
+    		allFilterButton.MouseButton1Click:Connect(setDefaultFilters)
     		lowImpactButton.MouseButton1Click:Connect(function()
     			Settings.Decompiler.CodeSearchLowImpact = not isLowImpactIndex()
     			updateLowImpactButton()
@@ -18996,7 +19143,8 @@ end,
     			end
     		end)
     		updateLowImpactButton()
-    		updateFilterButton()
+    		updateSmartButton(smartButton)
+    		updateFilterButtons()
     		searchBox.FocusLost:Connect(function(enterPressed)
     			if enterPressed then
     				CodeSearch.Search()
@@ -19196,10 +19344,11 @@ end,
     --[[
     	Script Dependency Graph App Module
     	Builds a cache-backed graph of require links and remote mentions.
+    	Upgraded to a fully interactive visual node graph.
     ]]
-    local Main,Lib,Apps,Settings
+    local Main, Lib, Apps, Settings
     local Explorer, ScriptViewer, DependencyGraph
-    local API,RMD,env,service,plr,create,createSimple
+    local API, RMD, env, service, plr, create, createSimple
     
     local function initDeps(data)
     	Main, Lib, Apps, Settings = data.Main, data.Lib, data.Apps, data.Settings
@@ -19215,44 +19364,37 @@ end,
     
     local function main()
     	local DependencyGraph = {}
-    	local window, listFrame, statusLabel
+    	local window, listFrame, statusLabel, sidePanel
+    	local sideTitle, sidePath, sideMeta, sideRole, sideIncoming, sideOutgoing
+    	local contextMenu
     	local scanToken = 0
     	local remoteClasses = {RemoteEvent=true, RemoteFunction=true, UnreliableRemoteEvent=true, BindableEvent=true, BindableFunction=true}
     
+    	-- Graph State
+    	local nodesData = {}      -- Key -> Node data
+    	local edgesData = {}      -- List of { fromKey, toKey }
+    	local nodeFrames = {}     -- Key -> Frame UI
+    	local edgeLines = {}      -- List of Line UI Frames
+    
     	local function getPath(obj)
-            if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(obj) end
+    		if Main and Main.SafeGetInstancePath then return Main.SafeGetInstancePath(obj) end
     		local ok, path = pcall(function()
     			if Explorer and Explorer.GetInstancePath then return Explorer.GetInstancePath(obj) end
     			return obj:GetFullName()
     		end)
     		return ok and tostring(path) or tostring(obj)
     	end
-    	local function clearRows()
-    		for _, child in pairs(listFrame:GetChildren()) do
-    			if child:IsA("GuiButton") or child:IsA("TextLabel") then child:Destroy() end
+    
+    	local function copyText(text, okMessage)
+    		if not env.setclipboard then
+    			if statusLabel then statusLabel.Text = "Clipboard API is unavailable." end
+    			return false
     		end
+    		env.setclipboard(tostring(text or ""))
+    		if statusLabel then statusLabel.Text = okMessage or "Copied to clipboard." end
+    		return true
     	end
-    	local function textRow(text, muted)
-    		local label = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Size=UDim2.new(1,-8,0,22), Text=text, TextColor3=muted and Settings.Theme.PlaceholderText or Settings.Theme.Text, TextSize=14, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=listFrame})
-    		local pad = Instance.new("UIPadding")
-    		pad.PaddingLeft = UDim.new(0,6)
-    		pad.Parent = label
-    	end
-    	local function divider(text)
-    		local label = createSimple("TextLabel",{BackgroundColor3=Settings.Theme.Main1, BorderSizePixel=0, Font=Enum.Font.SourceSansBold, Size=UDim2.new(1,-8,0,22), Text=text, TextColor3=Settings.Theme.Text, TextSize=14, TextXAlignment=Enum.TextXAlignment.Left, Parent=listFrame})
-    		local pad = Instance.new("UIPadding")
-    		pad.PaddingLeft = UDim.new(0,6)
-    		pad.Parent = label
-    	end
-    	local function scriptRow(title, detail, scriptObj)
-    		local row = createSimple("TextButton",{AutoButtonColor=false, BackgroundColor3=Settings.Theme.Main2, BorderColor3=Settings.Theme.Outline1, BorderSizePixel=1, Font=Enum.Font.SourceSans, Size=UDim2.new(1,-8,0,42), Text="", Parent=listFrame})
-    		createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,0,2), Size=UDim2.new(1,-16,0,18), Text=title, TextColor3=Settings.Theme.Text, TextSize=14, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=row})
-    		createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,8,0,21), Size=UDim2.new(1,-16,0,18), Text=detail, TextColor3=Settings.Theme.PlaceholderText, TextSize=13, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=row})
-    		Lib.ButtonAnim(row,{Mode=2, StartColor=Settings.Theme.Main2, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline1})
-    		row.MouseButton1Click:Connect(function()
-    			if scriptObj and ScriptViewer then ScriptViewer.ViewScript(scriptObj) end
-    		end)
-    	end
+    
     	local function scriptByKey()
     		if env.ClientIndex and env.ClientIndex.GetScriptLookup then
     			return env.ClientIndex.GetScriptLookup()
@@ -19268,6 +19410,7 @@ end,
     		end
     		return map
     	end
+    
     	local function collectRemotes()
     		if env.ClientIndex and env.ClientIndex.RefreshSurface then
     			return env.ClientIndex.RefreshSurface(false).Remotes
@@ -19279,23 +19422,207 @@ end,
     		end
     		return remotes
     	end
+    
+    	-- Simple Rotated Line Drawer for Canvas
+    	local function drawLine(p1, p2)
+    		local dx = p2.X - p1.X
+    		local dy = p2.Y - p1.Y
+    		local length = math.sqrt(dx * dx + dy * dy)
+    		if length < 1 then return nil end
+    		local angle = math.deg(math.atan2(dy, dx))
+    
+    		local line = Instance.new("Frame")
+    		line.BorderSizePixel = 0
+    		line.BackgroundColor3 = Settings.Theme.Outline1
+    		line.Size = UDim2.new(0, length, 0, 1)
+    		line.Position = UDim2.new(0, p1.X, 0, p1.Y)
+    		line.Rotation = angle
+    		line.AnchorPoint = Vector2.new(0, 0.5)
+    		line.ZIndex = 5
+    		line.Parent = listFrame
+    		return line
+    	end
+    
+    	local function updateLines()
+    		for _, line in ipairs(edgeLines) do
+    			line:Destroy()
+    		end
+    		table.clear(edgeLines)
+    
+    		for _, edge in ipairs(edgesData) do
+    			local fFrame = nodeFrames[edge.fromKey]
+    			local tFrame = nodeFrames[edge.toKey]
+    			if fFrame and tFrame then
+    				local p1 = Vector2.new(
+    					fFrame.Position.X.Offset + fFrame.Size.X.Offset / 2,
+    					fFrame.Position.Y.Offset + fFrame.Size.Y.Offset / 2
+    				)
+    				local p2 = Vector2.new(
+    					tFrame.Position.X.Offset + tFrame.Size.X.Offset / 2,
+    					tFrame.Position.Y.Offset + tFrame.Size.Y.Offset / 2
+    				)
+    				local line = drawLine(p1, p2)
+    				if line then
+    					table.insert(edgeLines, line)
+    				end
+    			end
+    		end
+    	end
+    
+    	-- Context Menu Helper
+    	local function showContextMenu(pos, node)
+    		if contextMenu then contextMenu:Destroy() end
+    		
+    		contextMenu = Instance.new("Frame")
+    		contextMenu.BackgroundColor3 = Settings.Theme.Main1
+    		contextMenu.BorderColor3 = Settings.Theme.Outline2
+    		contextMenu.BorderSizePixel = 1
+    		contextMenu.Size = UDim2.new(0, 150, 0, 0)
+    		contextMenu.Position = UDim2.new(0, pos.X, 0, pos.Y)
+    		contextMenu.ZIndex = 100
+    		contextMenu.Parent = listFrame
+    
+    		local menuLayout = Instance.new("UIListLayout", contextMenu)
+    		menuLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    
+    		local function addOption(text, cb)
+    			local btn = Instance.new("TextButton", contextMenu)
+    			btn.Size = UDim2.new(1, 0, 0, 24)
+    			btn.BorderSizePixel = 0
+    			btn.BackgroundColor3 = Settings.Theme.Main1
+    			btn.TextColor3 = Settings.Theme.Text
+    			btn.Font = Enum.Font.SourceSans
+    			btn.TextSize = 13
+    			btn.Text = text
+    			btn.ZIndex = 100
+    
+    			btn.MouseEnter:Connect(function() btn.BackgroundColor3 = Settings.Theme.ButtonHover end)
+    			btn.MouseLeave:Connect(function() btn.BackgroundColor3 = Settings.Theme.Main1 end)
+    			btn.MouseButton1Click:Connect(function()
+    				contextMenu:Destroy()
+    				cb()
+    			end)
+    		end
+    
+    		addOption("Decompile Source", function()
+    			if node.InstanceObj and ScriptViewer then
+    				ScriptViewer.ViewScript(node.InstanceObj)
+    			end
+    		end)
+    
+    		addOption("Focus in Explorer", function()
+    			if node.InstanceObj and Explorer then
+    				if Explorer.SelectObject then
+    					Explorer.SelectObject(node.InstanceObj)
+    				elseif Explorer.ViewObj then
+    					Explorer.ViewObj(node.InstanceObj)
+    				end
+    			end
+    		end)
+    
+    		addOption("Copy Path", function()
+    			if node.InstanceObj then
+    				copyText(getPath(node.InstanceObj), "Copied script path.")
+    			end
+    		end)
+    
+    		addOption("Copy Source Code", function()
+    			if node.InstanceObj and env.readfile and node.FilePath then
+    				local ok, source = pcall(env.readfile, node.FilePath)
+    				if ok then copyText(source, "Copied code.") end
+    			end
+    		end)
+    
+    		local itemsCount = #menuLayout:GetChildren() - 1
+    		contextMenu.Size = UDim2.new(0, 150, 0, itemsCount * 24)
+    
+    		-- Close context menu on clicking elsewhere
+    		local con
+    		con = service.UserInputService.InputBegan:Connect(function(input)
+    			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 then
+    				contextMenu:Destroy()
+    				con:Disconnect()
+    			end
+    		end)
+    	end
+    
+    	-- Details Sidebar Inspector
+    	local function showNodeDetails(node)
+    		if not sidePanel then return end
+    		sidePanel.Visible = true
+    
+    		sideTitle.Text = node.Name
+    		sidePath.Text = node.InstanceObj and getPath(node.InstanceObj) or "Path unavailable"
+    		sideMeta.Text = tostring(node.Class) .. " | key " .. tostring(node.Key:sub(1,8))
+    		sideRole.Text = "Role: " .. node.Role:upper()
+    		
+    		if node.Role == "Core Logic" then
+    			sideRole.TextColor3 = Color3.fromRGB(239, 68, 68)
+    		elseif node.Role == "Remote Gateway" then
+    			sideRole.TextColor3 = Color3.fromRGB(59, 130, 246)
+    		else
+    			sideRole.TextColor3 = Settings.Theme.Text
+    		end
+    
+    		-- Build relations text
+    		local incoming = {}
+    		for _, edge in ipairs(edgesData) do
+    			if edge.toKey == node.Key then
+    				local fNode = nodesData[edge.fromKey]
+    				if fNode then table.insert(incoming, fNode.Name) end
+    			end
+    		end
+    		sideIncoming.Text = #incoming > 0 and table.concat(incoming, ", ") or "None"
+    
+    		local outgoing = {}
+    		for _, edge in ipairs(edgesData) do
+    			if edge.fromKey == node.Key then
+    				local tNode = nodesData[edge.toKey]
+    				if tNode then table.insert(outgoing, tNode.Name) end
+    			end
+    		end
+    		sideOutgoing.Text = #outgoing > 0 and table.concat(outgoing, ", ") or "None"
+    	end
+    
+    	local function clearCanvas()
+    		for _, frame in pairs(nodeFrames) do
+    			frame:Destroy()
+    		end
+    		table.clear(nodeFrames)
+    		for _, line in ipairs(edgeLines) do
+    			line:Destroy()
+    		end
+    		table.clear(edgeLines)
+    		if contextMenu then contextMenu:Destroy() end
+    		if sidePanel then sidePanel.Visible = false end
+    	end
+    
     	local function scan()
     		scanToken += 1
     		local token = scanToken
-    		clearRows()
+    		clearCanvas()
+    		table.clear(nodesData)
+    		table.clear(edgesData)
+    
     		window:SetTitle("Script Dependency Graph")
     		if not env.DecompileCache or not env.DecompileCache.GetEntries or not env.isfile then
-    			textRow("Cache unavailable. Run Code Search > Index Scripts first.", true)
+    			statusLabel.Text = "Cache unavailable. Run Code Search > Index Scripts first."
     			return
     		end
+    
     		statusLabel.Text = "Scanning cached scripts..."
-    		divider("Require Links")
-    		window:Show()
     		task.spawn(function()
     			local entries, cacheDir = env.DecompileCache.GetEntries()
     			local byKey, remotes = scriptByKey(), collectRemotes()
-    			local scanned, requires, remoteHits = 0, 0, 0
-    			local remoteRows = {}
+    			
+    			local scanned = 0
+    			local requireLinks = 0
+    			local remoteHits = 0
+    
+    			-- Pass 1: Parse all scripts and build nodes & adjacency lists
+    			local inDegree = {} -- Key -> Count
+    			local tempRelations = {} -- Key -> list of required keys
+    
     			for key, entry in pairs(entries) do
     				if token ~= scanToken then return end
     				if entry.File then
@@ -19304,56 +19631,252 @@ end,
     						local ok, source = pcall(env.readfile, filePath)
     						if ok and type(source) == "string" then
     							scanned += 1
+    							tempRelations[key] = {}
+    							inDegree[key] = inDegree[key] or 0
+    
+    							-- Find requires
     							for block in source:gmatch("require%s*%b()") do
-    								requires += 1
-    								scriptRow(tostring(entry.Path or entry.Name), "requires: " .. block:gsub("\n"," "), byKey[key])
-    								if requires >= 80 then break end
-    							end
-    							local lower = source:lower()
-    							for _, remote in ipairs(remotes) do
-    								if #remote.Name >= 2 and lower:find(remote.Name:lower(), 1, true) then
-    									remoteHits += 1
-    									remoteRows[#remoteRows + 1] = {Entry = entry, Key = key, Remote = remote}
-    									break
+    								-- Match other script names in require
+    								for otherKey, otherEntry in pairs(entries) do
+    									if otherKey ~= key and otherEntry.Name then
+    										local otherName = otherEntry.Name:lower()
+    										if #otherName >= 3 and block:lower():find(otherName, 1, true) then
+    											table.insert(tempRelations[key], otherKey)
+    											inDegree[otherKey] = (inDegree[otherKey] or 0) + 1
+    											requireLinks += 1
+    										end
+    									end
     								end
     							end
+    
+    							-- Find remotes
+    							local lower = source:lower()
+    							local hasRemote = false
+    							for _, remote in ipairs(remotes) do
+    								if #remote.Name >= 3 and lower:find(remote.Name:lower(), 1, true) then
+    									hasRemote = true
+    									remoteHits += 1
+    								end
+    							end
+    
+    							nodesData[key] = {
+    								Key = key,
+    								Name = tostring(entry.Name or "Script"),
+    								Class = tostring(entry.ClassName or "Script"),
+    								FilePath = filePath,
+    								InstanceObj = byKey[key],
+    								HasRemote = hasRemote,
+    								InDegree = 0,
+    								Role = "Client Controller"
+    							}
     						end
     					end
     				end
-    				if scanned % 20 == 0 then statusLabel.Text = ("Scanned %d cached scripts..."):format(scanned); task.wait() end
+    				if scanned % 30 == 0 then
+    					statusLabel.Text = ("Reading %d cached scripts..."):format(scanned)
+    					task.wait()
+    				end
     			end
-    			divider("Remote Mentions")
-    			for i, hit in ipairs(remoteRows) do
-    				if i > 80 then textRow("More remote hits omitted.", true); break end
-    				scriptRow(tostring(hit.Entry.Path or hit.Entry.Name), "mentions remote: " .. hit.Remote.Name .. " | " .. getPath(hit.Remote), byKey[hit.Key])
+    
+    			-- Pass 2: Apply classification & save edges
+    			for key, node in pairs(nodesData) do
+    				node.InDegree = inDegree[key] or 0
+    				
+    				-- Classify roles
+    				if node.InDegree >= 3 then
+    					node.Role = "Core Logic"
+    				elseif node.HasRemote then
+    					node.Role = "Remote Gateway"
+    				elseif node.Class == "ModuleScript" then
+    					node.Role = "Utility Library"
+    				end
+    
+    				-- Register Edges
+    				local deps = tempRelations[key]
+    				if deps then
+    					for _, depKey in ipairs(deps) do
+    						if nodesData[depKey] then
+    							table.insert(edgesData, { fromKey = key, toKey = depKey })
+    						end
+    					end
+    				end
     			end
-    			if requires == 0 and remoteHits == 0 then textRow("No graph hints found yet.", true) end
-    			statusLabel.Text = ("Graph ready: %d scripts, %d require links, %d remote mentions."):format(scanned, requires, remoteHits)
+    
+    			-- Pass 3: Lay out nodes dynamically and render
+    			local index = 0
+    			local columns = {
+    				["Client Controller"] = 1,
+    				["Remote Gateway"] = 2,
+    				["Core Logic"] = 3,
+    				["Utility Library"] = 4
+    			}
+    			local colY = {100, 100, 100, 100}
+    
+    			for key, node in pairs(nodesData) do
+    				local col = columns[node.Role] or 1
+    				local x = col * 260 - 150
+    				local y = colY[col]
+    				colY[col] = colY[col] + 80
+    
+    				local nodeFrame = Instance.new("Frame")
+    				nodeFrame.BackgroundColor3 = Settings.Theme.Main1
+    				nodeFrame.BorderColor3 = Settings.Theme.Outline2
+    				nodeFrame.BorderSizePixel = 1
+    				nodeFrame.Size = UDim2.new(0, 180, 0, 48)
+    				nodeFrame.Position = UDim2.new(0, x, 0, y)
+    				nodeFrame.ZIndex = 10
+    				nodeFrame.Parent = listFrame
+    
+    				local c = Instance.new("UICorner", nodeFrame)
+    				c.CornerRadius = UDim.new(0, 4)
+    
+    				-- Node Header Name
+    				local nameLbl = Instance.new("TextLabel", nodeFrame)
+    				nameLbl.BackgroundTransparency = 1
+    				nameLbl.Position = UDim2.new(0, 8, 0, 4)
+    				nameLbl.Size = UDim2.new(1, -16, 0, 18)
+    				nameLbl.Font = Enum.Font.SourceSansBold
+    				nameLbl.TextSize = 13
+    				nameLbl.TextColor3 = Settings.Theme.Text
+    				nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    				nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    				nameLbl.Text = node.Name
+    
+    				-- Role Badge
+    				local badgeLbl = Instance.new("TextLabel", nodeFrame)
+    				badgeLbl.BackgroundTransparency = 1
+    				badgeLbl.Position = UDim2.new(0, 8, 0, 22)
+    				badgeLbl.Size = UDim2.new(1, -16, 0, 16)
+    				badgeLbl.Font = Enum.Font.SourceSans
+    				badgeLbl.TextSize = 11
+    				badgeLbl.TextXAlignment = Enum.TextXAlignment.Left
+    				badgeLbl.Text = "[" .. node.Role .. "]"
+    
+    				if node.Role == "Core Logic" then
+    					badgeLbl.TextColor3 = Color3.fromRGB(239, 68, 68)
+    				elseif node.Role == "Remote Gateway" then
+    					badgeLbl.TextColor3 = Color3.fromRGB(59, 130, 246)
+    				else
+    					badgeLbl.TextColor3 = Settings.Theme.PlaceholderText
+    				end
+    
+    				nodeFrames[key] = nodeFrame
+    
+    				-- Interactivity: Drag & Drop
+    				local dragging = false
+    				local dragStart, startPos, dragInput
+    
+    				nodeFrame.InputBegan:Connect(function(input)
+    					if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    						dragging = true
+    						dragStart = input.Position
+    						startPos = nodeFrame.Position
+    
+    						local con
+    						con = input.Changed:Connect(function()
+    							if input.UserInputState == Enum.UserInputState.End then
+    								dragging = false
+    								con:Disconnect()
+    							end
+    						end)
+    					elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+    						showContextMenu(Vector2.new(nodeFrame.Position.X.Offset + 10, nodeFrame.Position.Y.Offset + 10), node)
+    					end
+    				end)
+    
+    				nodeFrame.InputChanged:Connect(function(input)
+    					if input.UserInputType == Enum.UserInputType.MouseMovement then
+    						dragInput = input
+    					end
+    				end)
+    
+    				service.UserInputService.InputChanged:Connect(function(input)
+    					if input == dragInput and dragging then
+    						local delta = input.Position - dragStart
+    						nodeFrame.Position = UDim2.new(0, startPos.X.Offset + delta.X, 0, startPos.Y.Offset + delta.Y)
+    						updateLines()
+    					end
+    				end)
+    
+    				-- Double click to inspect
+    				nodeFrame.InputBegan:Connect(function(input)
+    					if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    						local now = tick()
+    						if nodeFrame:GetAttribute("LastClick") and now - nodeFrame:GetAttribute("LastClick") < 0.35 then
+    							showNodeDetails(node)
+    						end
+    						nodeFrame:SetAttribute("LastClick", now)
+    					end
+    				end)
+    			end
+    
+    			-- Auto size scrolling canvas
+    			local maxX, maxY = 800, 600
+    			for _, frame in pairs(nodeFrames) do
+    				maxX = math.max(maxX, frame.Position.X.Offset + 300)
+    				maxY = math.max(maxY, frame.Position.Y.Offset + 200)
+    			end
+    			listFrame.CanvasSize = UDim2.new(0, maxX, 0, maxY)
+    
+    			updateLines()
+    			statusLabel.Text = ("Graph built: %d nodes, %d links, %d remotes. Double click node to inspect."):format(scanned, requireLinks, remoteHits)
     		end)
     	end
+    
     	local function button(parent, text, x, w, cb)
     		local b = createSimple("TextButton",{AutoButtonColor=false, BackgroundColor3=Settings.Theme.Button, BorderColor3=Settings.Theme.Outline2, Font=Enum.Font.SourceSans, Position=UDim2.new(0,x,0,4), Size=UDim2.new(0,w,0,22), Text=text, TextColor3=Settings.Theme.Text, TextSize=14, Parent=parent})
     		b.MouseButton1Click:Connect(cb)
     		Lib.ButtonAnim(b,{Mode=2, StartColor=Settings.Theme.Button, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress, OutlineColor=Settings.Theme.Outline2})
     	end
+    
     	DependencyGraph.Init = function()
     		window = Lib.Window.new()
     		window:SetTitle("Script Dependency Graph")
-    		window:Resize(640,420)
+    		window:Resize(780, 480)
     		DependencyGraph.Window = window
+    
     		local content = window.GuiElems.Content
-    		local toolbar = createSimple("Frame",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Size=UDim2.new(1,0,0,56), Parent=content})
+    
+    		local toolbar = createSimple("Frame",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Size=UDim2.new(1,0,0,32), Parent=content})
     		button(toolbar,"Scan Graph",6,86,scan)
-    		statusLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,100,0,4), Size=UDim2.new(1,-106,0,22), Text="Run Code Search index, then scan graph.", TextColor3=Settings.Theme.PlaceholderText, TextSize=14, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=toolbar})
-    		listFrame = createSimple("ScrollingFrame",{Active=true, AutomaticCanvasSize=Enum.AutomaticSize.Y, BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, BottomImage="", CanvasSize=UDim2.new(0,0,0,0), Position=UDim2.new(0,0,0,56), ScrollBarImageColor3=Color3.fromRGB(70,70,70), ScrollBarThickness=10, Size=UDim2.new(1,0,1,-56), TopImage="", Parent=content})
-    		local layout = Instance.new("UIListLayout")
-    		layout.Padding = UDim.new(0,4)
-    		layout.SortOrder = Enum.SortOrder.LayoutOrder
-    		layout.Parent = listFrame
-    		local pad = Instance.new("UIPadding")
-    		pad.PaddingBottom, pad.PaddingLeft, pad.PaddingRight, pad.PaddingTop = UDim.new(0,6), UDim.new(0,4), UDim.new(0,4), UDim.new(0,4)
-    		pad.Parent = listFrame
+    
+    		statusLabel = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Position=UDim2.new(0,100,0,4), Size=UDim2.new(1,-106,0,22), Text="Run Code Search index first, then click Scan Graph.", TextColor3=Settings.Theme.PlaceholderText, TextSize=13, TextTruncate=Enum.TextTruncate.AtEnd, TextXAlignment=Enum.TextXAlignment.Left, Parent=toolbar})
+    
+    		local mainArea = createSimple("Frame",{BackgroundTransparency=1, Position=UDim2.new(0,0,0,32), Size=UDim2.new(1,0,1,-32), Parent=content})
+    
+    		-- Collapsible Side Panel (Initially Collapsed/Hidden)
+    		sidePanel = createSimple("Frame",{BackgroundColor3=Settings.Theme.Main1, BorderColor3=Settings.Theme.Outline2, BorderSizePixel=1, Position=UDim2.new(1,-220,0,0), Size=UDim2.new(0,220,1,0), Visible=false, ZIndex=50, Parent=mainArea})
+    		
+    		local sidePad = Instance.new("UIPadding", sidePanel)
+    		sidePad.PaddingLeft, sidePad.PaddingRight, sidePad.PaddingTop, sidePad.PaddingBottom = UDim.new(0,8), UDim.new(0,8), UDim.new(0,8), UDim.new(0,8)
+    
+    		local sideLayout = Instance.new("UIListLayout", sidePanel)
+    		sideLayout.Padding = UDim.new(0,6)
+    
+    		sideTitle = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Size=UDim2.new(1,0,0,20), Text="Script Name", TextColor3=Settings.Theme.Text, TextSize=14, TextXAlignment=Enum.TextXAlignment.Left, Parent=sidePanel})
+    		sideRole = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Size=UDim2.new(1,0,0,16), Text="Role: Core Logic", TextColor3=Settings.Theme.Important, TextSize=12, TextXAlignment=Enum.TextXAlignment.Left, Parent=sidePanel})
+    		sideMeta = createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSans, Size=UDim2.new(1,0,0,16), Text="Class & ID", TextColor3=Settings.Theme.PlaceholderText, TextSize=11, TextXAlignment=Enum.TextXAlignment.Left, Parent=sidePanel})
+    		
+    		createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Size=UDim2.new(1,0,0,16), Text="Path:", TextColor3=Settings.Theme.PlaceholderText, TextSize=12, TextXAlignment=Enum.TextXAlignment.Left, Parent=sidePanel})
+    		sidePath = createSimple("TextBox",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Font=Enum.Font.Code, Size=UDim2.new(1,0,0,40), TextEditable=false, ClearTextOnFocus=false, TextWrapped=true, TextSize=10, TextColor3=Settings.Theme.Text, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, Parent=sidePanel})
+    		Instance.new("UIPadding", sidePath).PaddingLeft = UDim.new(0,4)
+    
+    		createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Size=UDim2.new(1,0,0,16), Text="Required By (Incoming):", TextColor3=Settings.Theme.PlaceholderText, TextSize=12, TextXAlignment=Enum.TextXAlignment.Left, Parent=sidePanel})
+    		sideIncoming = createSimple("TextBox",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Font=Enum.Font.SourceSans, Size=UDim2.new(1,0,0,50), TextEditable=false, ClearTextOnFocus=false, TextWrapped=true, TextSize=11, TextColor3=Settings.Theme.Text, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, Parent=sidePanel})
+    		Instance.new("UIPadding", sideIncoming).PaddingLeft = UDim.new(0,4)
+    
+    		createSimple("TextLabel",{BackgroundTransparency=1, Font=Enum.Font.SourceSansBold, Size=UDim2.new(1,0,0,16), Text="Requires (Outgoing):", TextColor3=Settings.Theme.PlaceholderText, TextSize=12, TextXAlignment=Enum.TextXAlignment.Left, Parent=sidePanel})
+    		sideOutgoing = createSimple("TextBox",{BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, Font=Enum.Font.SourceSans, Size=UDim2.new(1,0,0,50), TextEditable=false, ClearTextOnFocus=false, TextWrapped=true, TextSize=11, TextColor3=Settings.Theme.Text, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, Parent=sidePanel})
+    		Instance.new("UIPadding", sideOutgoing).PaddingLeft = UDim.new(0,4)
+    
+    		local closeSideBtn = createSimple("TextButton",{AutoButtonColor=false, BackgroundColor3=Settings.Theme.Button, BorderSizePixel=0, Font=Enum.Font.SourceSans, Size=UDim2.new(1,0,0,24), Text="Close Inspector", TextColor3=Settings.Theme.Text, TextSize=13, Parent=sidePanel})
+    		closeSideBtn.MouseButton1Click:Connect(function() sidePanel.Visible = false end)
+    		Lib.ButtonAnim(closeSideBtn,{Mode=2, StartColor=Settings.Theme.Button, HoverColor=Settings.Theme.ButtonHover, PressColor=Settings.Theme.ButtonPress})
+    
+    		-- Node Canvas area
+    		listFrame = createSimple("ScrollingFrame",{Active=true, AutomaticCanvasSize=Enum.AutomaticSize.None, BackgroundColor3=Settings.Theme.Main2, BorderSizePixel=0, BottomImage="", CanvasSize=UDim2.new(0,2000,0,2000), Position=UDim2.new(0,0,0,0), ScrollBarImageColor3=Color3.fromRGB(70,70,70), ScrollBarThickness=10, Size=UDim2.new(1,0,1,0), TopImage="", Parent=mainArea})
     	end
+    
     	DependencyGraph.Scan = scan
     	return DependencyGraph
     end
@@ -22398,9 +22921,12 @@ DefaultSettings = (function()
 			ShinyDecompilerPort = 3000,
 			HelperServerPort = 8080,
 			UseLocalHelper = false,
+			PreferLocalHelperDecompiler = true,
+			FastCacheRead = true,
 			HelperLogChanges = false,
 			HelperLogRateLimit = 5,
 			HelperRequestTimeout = 2,
+			HelperDecompileTimeout = 15,
 			CodeSearchLowImpact = true,
 		},
 		AutoCheckUpdate = true,
@@ -22807,7 +23333,16 @@ Main = (function()
 	Main.UpdateScriptURL = nil
 	Main.UpdateCheckStarted = false
 	Main.LatestUpdateSource = nil
+	Main.StartedAt = os.time()
 	Main.ToolState = {}
+	Main.ToolStatePostQueued = false
+	Main.ToolStateLastPost = 0
+	Main.GameContext = {
+		PlaceId = tostring(game.PlaceId or ""),
+		GameId = tostring(game.GameId or ""),
+		JobId = tostring(game.JobId or ""),
+		Name = tostring(game.Name or "Roblox session"),
+	}
 
 	Main.DisplayOrders = {
 		SideWindow = 8,
@@ -22825,7 +23360,11 @@ Main = (function()
 			old[k] = v
 		end
 		old.UpdatedAt = os.clock()
+		old.UpdatedWallAt = os.time()
 		Main.ToolState[name] = old
+		if Main.ScheduleToolStatePost then
+			Main.ScheduleToolStatePost()
+		end
 	end
 
 	Main.GetToolStates = function()
@@ -23537,8 +24076,8 @@ Main = (function()
 					and Settings.Decompiler.UseLocalHelper == true
 			end
 
-			function helper.Request(path, method, body, contentType)
-				if not helperEnabled() then return nil, "local helper disabled" end
+			function helper.Request(path, method, body, contentType, timeoutSeconds, allowWhenDisabled)
+				if not helperEnabled() and not allowWhenDisabled then return nil, "local helper disabled" end
 				local now = os.clock()
 				if helper.DisabledUntil > now then
 					return nil, "local helper temporarily disabled"
@@ -23553,7 +24092,7 @@ Main = (function()
 						["Content-Type"] = contentType or "text/plain"
 					},
 					Body = body,
-					Timeout = Settings.Decompiler.HelperRequestTimeout or 2,
+					Timeout = timeoutSeconds or Settings.Decompiler.HelperRequestTimeout or 2,
 				})
 				if not ok or not result then
 					helper.FailCount += 1
@@ -23663,11 +24202,17 @@ Main = (function()
 			end
 
 			function helper.Decompile(bytecode)
-				local result = helper.Request("/decompile", "POST", bytecode, "application/octet-stream")
+				local timeout = Settings.Decompiler.HelperDecompileTimeout or 15
+				local result = helper.Request("/decompile", "POST", bytecode, "application/octet-stream", timeout)
 				if result and result.StatusCode == 200 and type(result.Body) == "string" then
 					return result.Body
 				end
 				return nil
+			end
+
+			function helper.PostToolState(json)
+				local result = helper.Request("/tool-state", "POST", tostring(json or "{}"), "application/json", 1, true)
+				return result and result.StatusCode == 200
 			end
 
 			function helper.Log(line)
@@ -23677,6 +24222,72 @@ Main = (function()
 
 			return helper
 		end)()
+
+		task.spawn(function()
+			local ok, info = pcall(function()
+				local marketplace = service.MarketplaceService or game:GetService("MarketplaceService")
+				return marketplace:GetProductInfo(game.PlaceId)
+			end)
+			if ok and type(info) == "table" then
+				local resolvedName = info.Name or info.AssetName
+				if type(resolvedName) == "string" and resolvedName ~= "" then
+					Main.GameContext.Name = resolvedName
+				end
+				Main.GameContext.Creator = info.Creator and info.Creator.Name or nil
+			end
+			if Main.ScheduleToolStatePost then
+				Main.ScheduleToolStatePost()
+			end
+		end)
+
+		Main.BuildHelperToolState = function()
+			local payload = {
+				ok = true,
+				updatedAt = os.time(),
+				version = Main.Version,
+				session = {
+					state = "connected",
+					startedAt = Main.StartedAt or os.time(),
+					executor = Main.Executor or "unknown",
+				},
+				game = Main.GameContext,
+				settings = {
+					useLocalHelper = Settings.Decompiler and Settings.Decompiler.UseLocalHelper == true,
+					lowImpact = Settings.Decompiler and Settings.Decompiler.CodeSearchLowImpact ~= false,
+					fastCacheRead = Settings.Decompiler and Settings.Decompiler.FastCacheRead == true,
+				},
+				tools = Main.ToolState or {},
+			}
+			local ok, encoded = pcall(service.HttpService.JSONEncode, service.HttpService, payload)
+			return ok and encoded or nil
+		end
+
+		Main.PushToolStateToHelper = function()
+			if not env.HelperServer or not env.HelperServer.PostToolState then return false end
+			local encoded = Main.BuildHelperToolState and Main.BuildHelperToolState()
+			if not encoded then return false end
+			return env.HelperServer.PostToolState(encoded)
+		end
+
+		Main.ScheduleToolStatePost = function()
+			if Main.ToolStatePostQueued then return end
+			Main.ToolStatePostQueued = true
+			local delayTime = math.max(0, 0.5 - (os.clock() - (Main.ToolStateLastPost or 0)))
+			task.delay(delayTime, function()
+				Main.ToolStatePostQueued = false
+				Main.ToolStateLastPost = os.clock()
+				pcall(Main.PushToolStateToHelper)
+			end)
+		end
+
+		Main.ReportToolState("DEX Session", {
+			State = "connected",
+			Load = "low",
+			Version = Main.Version,
+			PlaceId = tostring(game.PlaceId or ""),
+			GameId = tostring(game.GameId or ""),
+			JobId = tostring(game.JobId or ""),
+		})
 
 		env.isdecompile = function()
 			return typeof(decompile) == "function" or typeof(getscriptbytecode) == "function" or false
@@ -23916,11 +24527,24 @@ Main = (function()
 				local path = placeDir .. "/" .. tostring(entry.File or info.File)
 				return env.isfile(path)
 			end
+			cache.HasFreshFast = function(script_instance)
+				loadMetadata()
+				if not ensureCacheFolders() then return false end
+
+				local info = getInfo(script_instance, true)
+				if not info then return false end
+
+				local entry = metadata.Scripts[info.Key]
+				if not entry then return false end
+
+				local path = placeDir .. "/" .. tostring(entry.File or info.File)
+				return env.isfile(path)
+			end
 			cache.Read = function(script_instance)
 				loadMetadata()
 				if not ensureCacheFolders() then return nil, "Filesystem APIs are unavailable." end
 
-				local info = getInfo(script_instance)
+				local info = getInfo(script_instance, Settings.Decompiler and Settings.Decompiler.FastCacheRead == true)
 				if not info then return nil, "Script cache info is unavailable." end
 
 				local entry = metadata.Scripts[info.Key]
@@ -23965,6 +24589,22 @@ Main = (function()
 		env.DecompileCache = createDecompileCache()
 
 		local function decompileUncached(script_instance, ...)
+			local helperPreferred = Settings.Decompiler.UseLocalHelper == true
+				and Settings.Decompiler.PreferLocalHelperDecompiler ~= false
+				and env.HelperServer
+				and env.HelperServer.Decompile
+				and typeof(getscriptbytecode) == "function"
+
+			if helperPreferred then
+				local success, bytecode = pcall(env.getscriptbytecode, script_instance)
+				if success and type(bytecode) == "string" and bytecode ~= "" then
+					local decompiled = env.HelperServer.Decompile(bytecode)
+					if isCacheableSource(decompiled) then
+						return decompiled
+					end
+				end
+			end
+
 			local tryNative = not Settings.Decompiler.PreferDecompilerFallback
 
 			if nativeDecompile and tryNative then
@@ -23981,11 +24621,11 @@ Main = (function()
 			-- If native failed or was skipped, try fallbacks using bytecode
 			if typeof(getscriptbytecode) == "function" then
 				-- Helper Fallback (offload to external decompiler backend)
-				if Settings.Decompiler.UseLocalHelper == true and env.HelperServer and env.HelperServer.Decompile then
+				if not helperPreferred and Settings.Decompiler.UseLocalHelper == true and env.HelperServer and env.HelperServer.Decompile then
 					local success, bytecode = pcall(env.getscriptbytecode, script_instance)
 					if success and bytecode then
 						local decompiled = env.HelperServer.Decompile(bytecode)
-						if decompiled and not decompiled:match("Deserialization failed") and not decompiled:match("Error") then
+						if isCacheableSource(decompiled) then
 							return decompiled
 						end
 					end
@@ -26733,7 +27373,7 @@ local function main()
 	local filter_text = ""
 
 	local window, list_frame, scroll_v, status_label, empty_label
-	local path_box, decompile_btn, explore_btn, inspect_btn, error_label
+	local path_box, decompile_btn, explore_btn, inspect_btn, relations_btn, error_label
 	local rebuild_list
 
 	local function scan_modules()
@@ -26816,6 +27456,8 @@ local function main()
 			explore_btn.BackgroundColor3 = settings_ref.Theme.Main1
 			inspect_btn.Active = false
 			inspect_btn.BackgroundColor3 = settings_ref.Theme.Main1
+			relations_btn.Active = false
+			relations_btn.BackgroundColor3 = settings_ref.Theme.Main1
 			error_label.Text = ""
 			return
 		end
@@ -26828,6 +27470,8 @@ local function main()
 		explore_btn.BackgroundColor3 = settings_ref.Theme.Button
 		inspect_btn.Active = true
 		inspect_btn.BackgroundColor3 = settings_ref.Theme.Button
+		relations_btn.Active = true
+		relations_btn.BackgroundColor3 = settings_ref.Theme.Button
 		error_label.Text = ""
 	end
 
@@ -27101,11 +27745,12 @@ local function main()
 		decompile_btn = make_btn(right_panel, "Decompile Source", 78, 28)
 		explore_btn   = make_btn(right_panel, "View in Explorer", 112, 28)
 		inspect_btn   = make_btn(right_panel, "Inspect Return Value", 146, 28)
+		relations_btn = make_btn(right_panel, "Show Script Relations", 180, 28)
 
 		error_label = Instance.new("TextLabel", right_panel)
 		error_label.BackgroundTransparency = 1
-		error_label.Position = UDim2.new(0, 10, 0, 185)
-		error_label.Size = UDim2.new(1, -20, 1, -195)
+		error_label.Position = UDim2.new(0, 10, 0, 220)
+		error_label.Size = UDim2.new(1, -20, 1, -230)
 		error_label.Font = get_theme() and get_theme().MapFont(Enum.Font.SourceSans) or Enum.Font.SourceSans
 		error_label.TextSize = 12
 		error_label.TextColor3 = Color3.fromRGB(239, 68, 68) -- red error
@@ -27169,6 +27814,17 @@ local function main()
 					error_label.TextColor3 = Color3.fromRGB(239, 68, 68)
 				end
 			end)
+		end)
+
+		relations_btn.MouseButton1Click:Connect(function()
+			if not selected_module then return end
+			local rel = apps_ref.ScriptRelations
+			if rel and rel.ShowForScript then
+				rel.ShowForScript(selected_module)
+			else
+				error_label.Text = "Script Relations plugin not found/active."
+				error_label.TextColor3 = Color3.fromRGB(239, 68, 68)
+			end
 		end)
 
 		scan_modules()

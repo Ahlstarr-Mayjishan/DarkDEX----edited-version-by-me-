@@ -11,8 +11,13 @@ DarkDEX++ can run independently using the `DEX++_compiled.luau` file, or fetch t
 - `POST /normalize-source`: Runs a lightweight source normalization pass, currently focused on readable variable renaming.
 - `POST /deobfuscate`: Compatibility alias for `/normalize-source`.
 - `POST /analyze-source`: Quickly analyzes raw/cached source code and returns a JSON object containing the line count, function count, remote calls, risk signals, and prominent identifiers.
+- `POST /analyze-source-fast`: Routes source to the compiled Rust lexical analyzer, then falls back to C++.
+- `POST /analyze-source-deep`: Routes source through Python, then Rust, then C++.
+- `POST /analyze-source-auto`: Selects Python for source below 256 KB and Rust for larger payloads, with automatic fallback.
 - `POST /index-source`: Stores a cached source file in the helper's in-memory analysis index.
 - `POST /search-source`: Searches the helper's in-memory source index and returns ranked JSON results.
+- `GET /worker-status`: Shows which language workers are available and what role each worker owns.
+- `POST /decompile`: Proxies bytecode to Potassium's local `Decompiler.exe` server when available.
 - `GET /index-status`: Returns the current in-memory index size.
 - `GET /tool-state`: Returns the latest live DEX tool state reported from Roblox.
 - `POST /tool-state`: Accepts a small JSON snapshot of live DEX tool state for the external dashboard.
@@ -27,9 +32,7 @@ In DEX settings, `Use Local Helper` is off by default. Turn it on only when you 
 
 Update checks are pinned by `Settings.AutoUpdateRef` by default (`v3.1`). Branch refs such as `main` or `master` are ignored unless `Settings.AutoUpdateAllowBranch` is explicitly enabled, so auto-update does not silently track a moving branch.
 
-Important: This C++ helper is **not a bytecode decompiler**. It does not possess an engine to decompile Roblox bytecode into Luau source code, so it does not directly speed up the `decompile(script)` step. The decompile speed still depends on your executor's native decompiler, the Shiny/lua.expert fallbacks, and DarkDEX++'s built-in cache.
-
-If `POST /decompile` is requested, the helper will return `501 Not Implemented` to avoid confusion.
+Important: the helper can proxy bytecode to Potassium's external `Decompiler.exe`, but Roblox still has to enumerate scripts and extract bytecode through the executor first. That bytecode extraction step cannot be moved outside the client from Luau. The helper reduces the source lifting/search/analysis work, while cache-first indexing reduces repeated bytecode pulls.
 
 ## Quick Start
 
@@ -42,6 +45,18 @@ loadstring(game:HttpGet("http://localhost:8080/script"))()
 ```
 
 If your executor does not allow `game:HttpGet` requests to localhost, copy the contents of `DEX++_compiled.luau` directly into the executor.
+
+## Dashboard guide
+
+The helper dashboard now shows the important startup states directly:
+
+- `Script delivery`: shows whether `/script` is ready and how large the current compiled script is.
+- `Copy loadstring`: copies the Roblox loadstring without opening the raw script page.
+- `Current Roblox session`: shows the connected game name, `PlaceId`, `GameId`, `JobId`, and executor after DEX reports in.
+- `Code Search` progress: shows which game is being indexed, progress percent, cached scripts, new decompile count, skipped scripts, failures, and helper-indexed source count.
+- `First run guide`: a beginner flow for starting the helper, running DEX, indexing, then searching outside Roblox.
+
+If the dashboard says `Roblox waiting`, run the loadstring in Roblox. If it says `script missing`, rebuild with `python .\build.py`.
 
 ## Rebuilding
 
@@ -58,6 +73,12 @@ cd .\HelperServer
 .\compile.bat
 ```
 
+Build and validate the Python/Rust workers:
+
+```powershell
+.\HelperWorkers\build.ps1
+```
+
 If `DEX_Helper.exe` is currently running, close the helper console window before compiling, as Windows may lock the executable file.
 
 ## What should I do to decompile faster?
@@ -69,6 +90,7 @@ The most effective approach currently is using the following pipeline:
 - Use `ClientIndex` so that tools avoid scanning the instance tree repeatedly.
 - Prioritize decompiling the script that is currently open/clicked first.
 - Normalize source, run `analyze-source`, and push cached source into the helper index after the source code is retrieved.
+- When using Potassium's external `Decompiler.exe`, enable `Use Local Helper`; DarkDEX++ will prefer helper decompile before native decompile and uses a longer helper decompile timeout.
 
 ## Local Analysis Engine
 
@@ -86,6 +108,18 @@ The helper loads `dex_helper_index.dat` on startup. Running `Index Scripts` refr
 For smoother Roblox sessions, use the browser dashboard at `http://localhost:8080/` for source search, index health, live DEX tool state, and paste-in analysis. Keep `Log Property Changes To Helper` disabled unless you are actively debugging property changes.
 
 The dashboard also includes a passive `Remote Contract Analyzer`: copy logs from Remote Spy, paste them into the dashboard, and it will summarize remote paths, call direction, methods, sample arguments, frequency, and risk wording. It does not fire or fuzz remotes.
+
+## Polyglot worker roles
+
+The helper uses multiple languages by responsibility instead of by decoration:
+
+- C++: local HTTP server, route handling, cache/index, dashboard delivery, search, and Potassium decompiler proxy.
+- Python: deeper source summaries, risk hints, beginner-friendly recommendations, and JSON shaping via `HelperWorkers/python/deep_source_analyzer.py`.
+- Rust: high-throughput lexical analysis for large source payloads via `HelperWorkers/rust_source_analyzer`.
+
+Routing is explicit: `/analyze-source-fast` prefers Rust, `/analyze-source-deep` prefers Python, and `/analyze-source-auto` selects by payload size. C++ remains the final in-process fallback, so analysis still works when Python or Rust is missing.
+
+Use `http://localhost:8080/worker-status` to see which workers are detected.
 
 ## Inspector Hub
 
@@ -126,7 +160,7 @@ In the Explorer, the `Copy to AI` option will automatically copy the object summ
 
 The copied analysis is compacted into line/function/require/remote/risk counts plus prominent identifiers, instead of pasting raw helper JSON into the prompt.
 
-To make the C++ helper truly speed up decompilation, it requires a real decompiler backend that accepts bytecode and returns Luau source code. The helper does not currently feature this component.
+The helper can speed up the backend/source lifting side when `Decompiler.exe` is reachable, but it cannot remove the client-side cost of finding script instances, reading metadata, extracting bytecode, UI updates, and HTTP transfer. Cache hits are therefore the biggest win.
 
 # Support Executor
 
