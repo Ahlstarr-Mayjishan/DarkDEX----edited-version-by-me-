@@ -26399,11 +26399,18 @@ end,
     	return env_func("request") or (syn and syn.request) or (http and http.request) or http_request or request
     end
     
+    local function getHelperPort()
+    	if settings_ref and settings_ref.Decompiler and settings_ref.Decompiler.HelperServerPort then
+    		return settings_ref.Decompiler.HelperServerPort
+    	end
+    	return 8080
+    end
+    
     local function postToHelper(endpoint, body)
     	local req = getRequestFunc()
     	if not req then return false, "Request API not available" end
     	local success, res = pcall(req, {
-    		Url = "http://localhost:8080" .. endpoint,
+    		Url = "http://localhost:" .. tostring(getHelperPort()) .. endpoint,
     		Method = "POST",
     		Headers = { ["Content-Type"] = "text/plain" },
     		Body = body
@@ -26414,17 +26421,52 @@ end,
     	return false, res and tostring(res.StatusCode) or tostring(res)
     end
     
+    local function getWebSocketConnect()
+    	local ws = (env_ref and env_ref.WebSocket) or env_func("WebSocket")
+    	if ws then
+    		if type(ws.connect) == "function" then
+    			return ws.connect
+    		elseif type(ws.Connect) == "function" then
+    			return ws.Connect
+    		end
+    	end
+    	local ws_lower = (env_ref and env_ref.websocket) or env_func("websocket")
+    	if ws_lower then
+    		if type(ws_lower.connect) == "function" then
+    			return ws_lower.connect
+    		elseif type(ws_lower.Connect) == "function" then
+    			return ws_lower.Connect
+    		end
+    	end
+    	local syn_ws = (env_ref and env_ref.syn) or env_func("syn")
+    	if syn_ws and syn_ws.websocket then
+    		if type(syn_ws.websocket.connect) == "function" then
+    			return syn_ws.websocket.connect
+    		elseif type(syn_ws.websocket.Connect) == "function" then
+    			return syn_ws.websocket.Connect
+    		end
+    	end
+    	return nil
+    end
+    
+    local function connectSignal(signal, callback)
+    	if not signal then return nil end
+    	if type(signal.Connect) == "function" then
+    		return signal:Connect(callback)
+    	elseif type(signal.connect) == "function" then
+    		return signal:connect(callback)
+    	end
+    	return nil
+    end
+    
     local syncActive = false
+    local wsCon = nil
     local lastPollTimestamp = 0
     
-    local function startSync(status_callback)
-    	if syncActive then return end
-    	syncActive = true
-    	lastPollTimestamp = 0
-    	
+    local function runHttpPolling(status_callback)
     	task.spawn(function()
     		local service = game:GetService("HttpService")
-    		while syncActive do
+    		while syncActive and not wsCon do
     			local success, body = postToHelper("/sync-poll", tostring(lastPollTimestamp))
     			if success and body then
     				local ok, data = pcall(service.JSONDecode, service, body)
@@ -26439,7 +26481,7 @@ end,
     						end
     					end
     					if count > 0 and status_callback then
-    						status_callback("Synced " .. tostring(count) .. " script(s) from IDE.")
+    						status_callback("Synced " .. tostring(count) .. " script(s) from IDE (HTTP).")
     					end
     				end
     			end
@@ -26448,8 +26490,101 @@ end,
     	end)
     end
     
+    local function startSync(status_callback)
+    	if syncActive then return end
+    	syncActive = true
+    	lastPollTimestamp = 0
+    	
+    	local ws_connect = getWebSocketConnect()
+    	if ws_connect then
+    		task.spawn(function()
+    			local conn_attempts = 0
+    			local max_attempts = 3
+    			local service = game:GetService("HttpService")
+    			
+    			while syncActive do
+    				if not wsCon then
+    					if status_callback then
+    						status_callback("Connecting via WebSocket (attempt " .. tostring(conn_attempts + 1) .. ")...")
+    					end
+    					
+    					local ok, socket = pcall(ws_connect, "ws://localhost:" .. tostring(getHelperPort()) .. "/sync-ws")
+    					if ok and socket then
+    						wsCon = socket
+    						conn_attempts = 0
+    						if status_callback then
+    							status_callback("Live Sync ACTIVE (WebSocket)")
+    						end
+    						
+    						local conn1, conn2, conn3
+    						local function onDisconnect()
+    							if conn1 then pcall(function() conn1:Disconnect() end) pcall(function() conn1:disconnect() end) end
+    							if conn2 then pcall(function() conn2:Disconnect() end) pcall(function() conn2:disconnect() end) end
+    							if conn3 then pcall(function() conn3:Disconnect() end) pcall(function() conn3:disconnect() end) end
+    							wsCon = nil
+    							if syncActive then
+    								if status_callback then
+    									status_callback("WebSocket disconnected. Reconnecting...")
+    								end
+    							end
+    						end
+    						
+    						conn1 = connectSignal(socket.OnClose, onDisconnect)
+    						conn2 = connectSignal(socket.OnError, onDisconnect)
+    						conn3 = connectSignal(socket.OnMessage, function(body)
+    							local ok, data = pcall(service.JSONDecode, service, body)
+    							if ok and data and data.ok then
+    								local count = 0
+    								for _, file in ipairs(data.files or {}) do
+    									local scriptObj = locateInstanceByPath(file.path)
+    									if scriptObj and (scriptObj.ClassName == "LocalScript" or scriptObj.ClassName == "ModuleScript" or scriptObj.ClassName == "Script") then
+    										scriptObj.Source = file.source
+    										count = count + 1
+    									end
+    								end
+    								if count > 0 and status_callback then
+    									status_callback("Synced " .. tostring(count) .. " script(s) from IDE (WS).")
+    								end
+    							end
+    						end)
+    					else
+    						conn_attempts = conn_attempts + 1
+    						if conn_attempts >= max_attempts then
+    							if status_callback then
+    								status_callback("WebSocket failed " .. tostring(max_attempts) .. " times. Falling back to HTTP Polling...")
+    							end
+    							task.wait(1)
+    							wsCon = nil
+    							break
+    						else
+    							if status_callback then
+    								status_callback("WebSocket connection failed. Retrying in 3s...")
+    							end
+    						end
+    					end
+    				end
+    				task.wait(3)
+    			end
+    			
+    			if syncActive and not wsCon then
+    				runHttpPolling(status_callback)
+    			end
+    		end)
+    	else
+    		if status_callback then
+    			status_callback("WebSocket API not supported. Using HTTP Polling...")
+    		end
+    		runHttpPolling(status_callback)
+    	end
+    end
+    
     local function stopSync()
     	syncActive = false
+    	if wsCon then
+    		pcall(function() wsCon:Close() end)
+    		pcall(function() wsCon.Close() end)
+    		wsCon = nil
+    	end
     end
     
     local function exportScript(scriptObj, status_callback)
@@ -26578,7 +26713,6 @@ end,
     		if syncActive then
     			startBtn.Visible = false
     			stopBtn.Visible = true
-    			setStatus("Live Sync is ACTIVE (IDE -> Roblox)")
     		else
     			startBtn.Visible = true
     			stopBtn.Visible = false
